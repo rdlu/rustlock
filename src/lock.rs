@@ -24,6 +24,12 @@ pub struct LockedSurface {
     wayland_surface: Option<wl_surface::WlSurface>,
     output: wl_output::WlOutput,
     configured: bool,
+    /// Set whenever rendered state changes (keystroke, status, clock minute,
+    /// animation step). update() renders only when this is set or an animation
+    /// is in flight, so an idle lock screen does no per-frame cairo work.
+    dirty: bool,
+    /// Last clock minute (unix-minute) we rendered, to detect %H:%M rollover.
+    last_minute: i64,
 }
 
 impl LockedSurface {
@@ -54,6 +60,8 @@ impl LockedSurface {
             wayland_surface: None,
             output,
             configured: false,
+            dirty: true,
+            last_minute: i64::MIN,
         })
     }
 
@@ -62,6 +70,7 @@ impl LockedSurface {
         log::debug!("LockedSurface: Configured, starting animation");
         self.configured = true;
         self.start_time = Instant::now();
+        self.dirty = true;
     }
 
     /// Check if this surface matches the given Wayland surface
@@ -72,12 +81,15 @@ impl LockedSurface {
             .is_some_and(|ws| ws.id() == surface.id())
     }
 
-    /// Update the surface state (called on each frame)
-    pub fn update(&mut self) {
+    /// Update the surface state (called on each frame). Returns `true` if the
+    /// surface was re-rendered and therefore needs to be committed. An idle
+    /// surface (no input, no animation, same clock minute) returns `false` and
+    /// does no cairo work, which keeps a locked session near-zero CPU.
+    pub fn update(&mut self) -> bool {
         self.input_handler.update();
 
         if !self.configured {
-            return;
+            return false;
         }
 
         // Update fade animation
@@ -92,9 +104,22 @@ impl LockedSurface {
                 1.0 - (-2.0 * t + 2.0).powi(3) / 2.0
             };
             let new_alpha = eased_t.min(1.0);
-            if (new_alpha - self.fade_alpha).abs() > 0.001 {
+            if t >= 1.0 {
+                // The eased curve only approaches 1.0 asymptotically, and the
+                // 0.001 throttle below suppresses the tiny final steps — which
+                // would leave fade_alpha stuck just under 1.0 forever. Since
+                // `fade_alpha < 1.0` is our "still animating" signal, that would
+                // force a full render every frame. Snap to exactly 1.0 once the
+                // fade duration has elapsed so the animation cleanly completes.
+                if self.fade_alpha != 1.0 {
+                    self.fade_alpha = 1.0;
+                    self.renderer.set_fade_alpha(1.0);
+                    self.dirty = true;
+                }
+            } else if (new_alpha - self.fade_alpha).abs() > 0.001 {
                 self.fade_alpha = new_alpha;
                 self.renderer.set_fade_alpha(self.fade_alpha);
+                self.dirty = true;
             }
         }
 
@@ -102,6 +127,7 @@ impl LockedSurface {
         if self.input_handler.should_show_wrong_password() && !self.wrong_password_shown {
             self.renderer.show_wrong_password();
             self.wrong_password_shown = true;
+            self.dirty = true;
         } else if !self.input_handler.should_show_wrong_password() && self.wrong_password_shown {
             self.wrong_password_shown = false;
         }
@@ -110,12 +136,16 @@ impl LockedSurface {
         if self.input_handler.should_show_key_highlight() && !self.key_highlight_shown {
             self.renderer.show_key_highlight();
             self.key_highlight_shown = true;
+            self.dirty = true;
         } else if !self.input_handler.should_show_key_highlight() && self.key_highlight_shown {
             self.key_highlight_shown = false;
         }
 
         // Update caps lock state in renderer
-        self.renderer.caps_lock = self.input_handler.caps_lock();
+        if self.renderer.caps_lock != self.input_handler.caps_lock() {
+            self.renderer.caps_lock = self.input_handler.caps_lock();
+            self.dirty = true;
+        }
 
         // Set background if available and not already applied
         if !self.background_applied {
@@ -123,7 +153,25 @@ impl LockedSurface {
                 log::info!("Applying background image to renderer");
                 self.renderer.set_background(background.clone());
                 self.background_applied = true;
+                self.dirty = true;
             }
+        }
+
+        // The clock displays %H:%M, so it only needs a redraw once per minute.
+        if self.config.clock {
+            let minute = chrono::Local::now().timestamp().div_euclid(60);
+            if self.last_minute != minute {
+                self.last_minute = minute;
+                self.dirty = true;
+            }
+        }
+
+        // Keep emitting frames while an animation is in flight so it can run to
+        // completion even though no new event arrives.
+        let animating = self.fade_alpha < 1.0 || self.renderer.is_animating();
+
+        if !self.dirty && !animating {
+            return false;
         }
 
         self.renderer
@@ -131,6 +179,8 @@ impl LockedSurface {
         self.renderer
             .set_cursor_position(self.input_handler.cursor_position());
         self.renderer.render();
+        self.dirty = false;
+        true
     }
 
     /// Commit the rendered frame to the Wayland surface
@@ -163,6 +213,7 @@ impl LockedSurface {
         }
         self.renderer.resize(width, height);
         self.background_applied = false;
+        self.dirty = true;
     }
 
     pub fn show_wrong_password(&mut self) {
@@ -177,6 +228,10 @@ impl LockedSurface {
         let action = self
             .input_handler
             .handle_key_event(event.keysym, event.utf8, modifiers);
+
+        // Any key event may change the password display, cursor or caps state,
+        // so request a redraw on the next update().
+        self.dirty = true;
 
         match action {
             InputAction::PasswordChanged => {
@@ -207,10 +262,14 @@ impl LockedSurface {
     pub fn set_background(&mut self, surface: ImageSurface) {
         self.background = Some(surface);
         self.background_applied = false;
+        self.dirty = true;
     }
 
     pub fn set_system_status(&mut self, status: SystemStatus) {
-        self.renderer.system_status = status;
+        if self.renderer.system_status != status {
+            self.renderer.system_status = status;
+            self.dirty = true;
+        }
     }
 }
 
@@ -234,12 +293,6 @@ impl LockManager {
                 true
             }
             None => false,
-        }
-    }
-
-    pub fn update(&mut self) {
-        for surface in &mut self.surfaces {
-            surface.update();
         }
     }
 

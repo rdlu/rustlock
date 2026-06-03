@@ -121,6 +121,14 @@ impl Renderer {
         }
     }
 
+    /// Whether any feedback animation is currently in flight and therefore
+    /// requires continued per-frame redraws until it finishes.
+    pub(crate) fn is_animating(&self) -> bool {
+        self.wrong_password_start.is_some()
+            || self.key_highlight_start.is_some()
+            || self.cleared_feedback_start.is_some()
+    }
+
     pub(crate) fn update_feedback_timers(&mut self) {
         self.update_uptime();
         if let Some(start) = self.wrong_password_start {
