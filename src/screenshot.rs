@@ -171,9 +171,9 @@ impl Screenshot {
                 }
 
                 if count > 0 {
-                    let r = (r / count) as u8;
-                    let g = (g / count) as u8;
-                    let b = (b / count) as u8;
+                    let r = r.checked_div(count).unwrap_or(0) as u8;
+                    let g = g.checked_div(count).unwrap_or(0) as u8;
+                    let b = b.checked_div(count).unwrap_or(0) as u8;
 
                     // Fill the block
                     for py in 0..pixel_size {

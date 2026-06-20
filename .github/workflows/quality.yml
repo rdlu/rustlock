@@ -14,24 +14,30 @@ jobs:
   quality-checks:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: Swatinem/rust-cache@v2
-      
+      - uses: actions/checkout@v6
+
       - uses: ./.github/actions/deps
-      
+
       - name: Install Rust with tools
         uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-      
+
+      - uses: Swatinem/rust-cache@v2
+
       - name: Check formatting
         run: cargo fmt -- --check
-      
+
       - name: Run clippy
-        run: cargo clippy -- -D warnings
-      
-      - name: Run unit tests
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Run unit tests (default features)
         run: cargo test --quiet
-      
+
+      - name: Run unit tests (all features)
+        run: cargo test --all-features --quiet
+
       - name: Check documentation
+        env:
+          RUSTDOCFLAGS: -D warnings
         run: cargo doc --no-deps --document-private-items

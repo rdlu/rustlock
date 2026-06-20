@@ -8,7 +8,7 @@ features:
 
 rendering:
   - changed-files:
-      - any-glob-to-any-file: ['src/render/**', 'src/render.rs']
+      - any-glob-to-any-file: ['src/render/**']
 
 ci:
   - changed-files:
@@ -20,4 +20,4 @@ dependencies:
 
 refactoring:
   - changed-files:
-      - any-glob-to-any-file: ['src/util.rs', 'src/system.rs']
+      - any-glob-to-any-file: ['src/util.rs', 'src/system.rs', 'src/main.rs']

@@ -4,7 +4,7 @@ description: Install system dependencies required for building rustlock
 runs:
   using: composite
   steps:
-    - name: Install system dependencies (Ubuntu/Debian)
+    - name: Install system dependencies for Debian based distros
       shell: bash
       run: |
         sudo apt-get update

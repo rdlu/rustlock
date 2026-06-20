@@ -19,42 +19,33 @@ jobs:
   security-audit:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: Swatinem/rust-cache@v2
-      
+      - uses: actions/checkout@v6
+
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
-      
+
+      - uses: Swatinem/rust-cache@v2
+
       - name: Install security tools
-        run: |
-          curl -L --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash
-          cargo binstall --no-confirm cargo-audit cargo-deny cargo-cyclonedx cargo-outdated || \
-          cargo install cargo-audit cargo-deny cargo-cyclonedx cargo-outdated
-      
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit,cargo-deny,cargo-cyclonedx,cargo-outdated
+
       - name: Run cargo audit
         run: cargo audit
-      
+
       - name: Run cargo deny
         run: cargo deny check
-      
+
       - name: Generate Software Bill of Materials (SBOM)
         run: cargo cyclonedx --format json --override-filename bom
-      
+
       - name: Upload SBOM
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: sbom
           path: bom.json
-      
+
       - name: Check for outdated dependencies
         run: cargo outdated --exit-code 1 || echo "Some dependencies are outdated"
-      
-      - name: Security summary
-        run: |
-          echo "=== Security Scan Complete ==="
-          echo "✅ cargo audit - Vulnerability scanning"
-          echo "✅ cargo deny - Advisory and license checking"
-          echo "✅ SBOM generated - Software Bill of Materials"
-          echo "✅ Outdated dependencies checked"
-          echo ""
-          echo "Next scheduled scan: Weekly (Sunday 00:00 UTC)"
+
