@@ -830,9 +830,12 @@ fn main() -> Result<(), Box<dyn Error>> {
 
         if let Ok(mut lm) = state.lock_manager.lock() {
             lm.set_system_status(status);
-            lm.update();
+            // Only commit surfaces that actually re-rendered this tick. An idle
+            // lock screen renders nothing and commits nothing.
             for surface in &mut lm.surfaces {
-                let _ = surface.commit(&mut state.pool);
+                if surface.update() {
+                    let _ = surface.commit(&mut state.pool);
+                }
             }
         }
         if state.exit {

@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
 use zbus::Connection;
 
-#[derive(Clone, Default)]
+#[derive(Clone, Default, PartialEq)]
 pub struct SystemStatus {
     pub battery_percent: Option<f64>,
     pub is_charging: bool,
