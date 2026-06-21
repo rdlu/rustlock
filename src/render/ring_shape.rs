@@ -9,13 +9,7 @@ const SEGMENTS: usize = 120;
 /// Return the (x, y) point on the shape's perimeter at normalized position `t` ∈ [0, 1].
 /// `t = 0` is a reference point (rightmost for most shapes); `t` increases clockwise.
 /// `r` is the shape's characteristic radius (distance from center to side/vertex).
-pub(crate) fn perimeter_point(
-    cx: f64,
-    cy: f64,
-    r: f64,
-    shape: RingShape,
-    t: f64,
-) -> (f64, f64) {
+pub(crate) fn perimeter_point(cx: f64, cy: f64, r: f64, shape: RingShape, t: f64) -> (f64, f64) {
     // Normalize t to [0, 1). Rust's % preserves sign, and the shape-specific
     // functions use floor/truncation that break on negative values.
     let t = t - t.floor();
@@ -95,18 +89,17 @@ fn hexagon_perimeter_point(cx: f64, cy: f64, r: f64, t: f64) -> (f64, f64) {
     let local = t * 6.0 - side as f64;
 
     // Shared helper for edges between two vertices
-    let vert = |angle_rad: f64| -> (f64, f64) {
-        (cx + r * angle_rad.cos(), cy + r * angle_rad.sin())
-    };
+    let vert =
+        |angle_rad: f64| -> (f64, f64) { (cx + r * angle_rad.cos(), cy + r * angle_rad.sin()) };
 
     // Vertices clockwise from right (angle = 0)
     let v = [
-        vert(0.0),                                     // V0: right
-        vert(std::f64::consts::PI * (1.0 / 3.0)),      // V1: bottom-right
-        vert(std::f64::consts::PI * (2.0 / 3.0)),      // V2: bottom-left
-        vert(std::f64::consts::PI),                    // V3: left
-        vert(std::f64::consts::PI * (4.0 / 3.0)),      // V4: top-left
-        vert(std::f64::consts::PI * (5.0 / 3.0)),      // V5: top-right
+        vert(0.0),                                // V0: right
+        vert(std::f64::consts::PI * (1.0 / 3.0)), // V1: bottom-right
+        vert(std::f64::consts::PI * (2.0 / 3.0)), // V2: bottom-left
+        vert(std::f64::consts::PI),               // V3: left
+        vert(std::f64::consts::PI * (4.0 / 3.0)), // V4: top-left
+        vert(std::f64::consts::PI * (5.0 / 3.0)), // V5: top-right
     ];
 
     let (x0, y0) = v[side as usize];

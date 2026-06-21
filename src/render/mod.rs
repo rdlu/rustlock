@@ -42,6 +42,7 @@ pub struct Renderer {
     pub(crate) key_highlight_angle: f64,
     pub(crate) background: Option<ImageSurface>,
     pub(crate) password_display: String,
+    pub(crate) peeking: bool,
     pub(crate) cursor_position: usize,
     pub(crate) uptime_cache: String,
     pub(crate) last_uptime_update: Option<Instant>,
@@ -85,6 +86,7 @@ impl Renderer {
             key_highlight_angle: 0.0,
             background: None,
             password_display: String::new(),
+            peeking: false,
             cursor_position: 0,
             uptime_cache: String::new(),
             last_uptime_update: None,
@@ -126,11 +128,18 @@ impl Renderer {
     }
 
     pub fn set_password_display(&mut self, length: usize) {
+        log::debug!("Renderer::set_password_display(length={})", length);
         self.password_display = ".".repeat(length);
+        self.peeking = false;
     }
 
     pub fn peek_password(&mut self, password: &str) {
+        log::debug!(
+            "Renderer::peek_password(len={}, peeking=true)",
+            password.len()
+        );
         self.password_display = password.to_string();
+        self.peeking = true;
     }
 
     pub fn set_cursor_position(&mut self, position: usize) {

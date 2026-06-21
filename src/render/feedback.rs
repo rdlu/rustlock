@@ -12,8 +12,7 @@ impl Renderer {
 
         if a > 0.0 {
             self.context.new_path();
-            self.context
-                .set_source_rgba(r, g, b, a * self.fade_alpha);
+            self.context.set_source_rgba(r, g, b, a * self.fade_alpha);
             self.context.set_line_width(thickness + 2.0);
             self.context.set_line_join(cairo::LineJoin::Round);
             ring_shape::build_ring_path(
@@ -180,19 +179,25 @@ impl Renderer {
     pub(crate) fn update_feedback_timers(&mut self) {
         self.update_uptime();
         if let Some(start) = self.wrong_password_start {
-            if start.elapsed() > std::time::Duration::from_millis(self.config.wrong_password_duration) {
+            if start.elapsed()
+                > std::time::Duration::from_millis(self.config.wrong_password_duration)
+            {
                 self.wrong_password_shown = false;
                 self.wrong_password_start = None;
             }
         }
         if let Some(start) = self.key_highlight_start {
-            if start.elapsed() > std::time::Duration::from_millis(self.config.key_highlight_duration) {
+            if start.elapsed()
+                > std::time::Duration::from_millis(self.config.key_highlight_duration)
+            {
                 self.key_highlight_shown = false;
                 self.key_highlight_start = None;
             }
         }
         if let Some(start) = self.cleared_feedback_start {
-            if start.elapsed() > std::time::Duration::from_millis(self.config.cleared_feedback_duration) {
+            if start.elapsed()
+                > std::time::Duration::from_millis(self.config.cleared_feedback_duration)
+            {
                 self.cleared_feedback_shown = false;
                 self.cleared_feedback_start = None;
             }

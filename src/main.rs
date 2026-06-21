@@ -65,10 +65,9 @@ fn setup_file_logging(config: &Config) {
             }
         }
     } else if config.log_file {
-        let default_path = std::path::PathBuf::from(
-            std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string()),
-        )
-        .join(".rustlock.log");
+        let default_path =
+            std::path::PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string()))
+                .join(".rustlock.log");
         match OpenOptions::new()
             .create(true)
             .write(true)
@@ -506,8 +505,16 @@ impl KeyboardHandler for WaylandLock {
         modifiers: Modifiers,
         layout: u32,
     ) {
+        let ctrl_changed = self.modifiers.ctrl != modifiers.ctrl;
         self.modifiers = modifiers;
         self.current_layout = layout;
+        if ctrl_changed {
+            log::debug!(
+                "update_modifiers: ctrl {} -> {}",
+                !modifiers.ctrl,
+                modifiers.ctrl
+            );
+        }
         if let Ok(mut lock_manager) = self.lock_manager.lock() {
             lock_manager.set_ctrl_held(modifiers.ctrl);
         }
@@ -650,7 +657,10 @@ impl Dispatch<ZwlrScreencopyFrameV1, CaptureData> for WaylandLock {
                         if let Ok(surface) = mgr.buffer_to_surface(handle, &mut pool) {
                             let mut ss = Screenshot::new(surface);
                             if let Err(e) = ss.apply_effects(&state.config) {
-                                log::error!("Failed to apply effects to screenshot {}: {e}", data.output_idx);
+                                log::error!(
+                                    "Failed to apply effects to screenshot {}: {e}",
+                                    data.output_idx
+                                );
                             }
                             if data.output_idx < state.captured_backgrounds.len() {
                                 state.captured_backgrounds[data.output_idx] = Some(ss.into_inner());
@@ -700,6 +710,8 @@ impl PointerHandler for WaylandLock {
                     if let Ok(lm) = self.lock_manager.lock() {
                         for surface in &lm.surfaces {
                             if surface.matches_surface(&event.surface) {
+                                // Check media controls first
+                                let mut handled = false;
                                 for (action, rx, ry, rw, rh) in &surface.renderer.media_rects {
                                     if x >= *rx && x <= rx + rw && y >= *ry && y <= ry + rh {
                                         match *action {
@@ -709,8 +721,34 @@ impl PointerHandler for WaylandLock {
                                             "prev" => self.system_manager.media_prev(),
                                             _ => {}
                                         }
-                                        return;
+                                        handled = true;
+                                        break;
                                     }
+                                }
+                                if handled {
+                                    return;
+                                }
+                                // Check indicator ring hit — toggle password peek
+                                let cx = surface.renderer.width as f64 / 2.0;
+                                let cy = surface.renderer.height as f64 / 2.0;
+                                let r = surface.renderer.config.indicator_radius as f64;
+                                let dx = x - cx;
+                                let dy = y - cy;
+                                if dx * dx + dy * dy <= r * r {
+                                    // Need to reborrow mutably for toggle
+                                    drop(lm);
+                                    if let Ok(mut lm) = self.lock_manager.lock() {
+                                        if let Some(s) = lm
+                                            .surfaces
+                                            .iter_mut()
+                                            .find(|s| s.matches_surface(&event.surface))
+                                        {
+                                            s.toggle_peek();
+                                            s.update();
+                                            let _ = s.commit(&mut self.pool);
+                                        }
+                                    }
+                                    return;
                                 }
                             }
                         }
@@ -757,12 +795,16 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let system_manager = Arc::new(SystemManager::new(&config));
 
-    let (auth_tx_actual, auth_feedback_rx_actual) =
-    match auth::create_and_run_auth_loop(config.pam_service.clone()) {
+    let (auth_tx_actual, auth_feedback_rx_actual) = match auth::create_and_run_auth_loop(
+        config.pam_service.clone(),
+    ) {
         Some(channels) => channels,
         None => {
             log::error!("Failed to initialize authentication. This usually means PAM is not configured correctly.");
-            log::error!("Please ensure you have a PAM service file at /etc/pam.d/{}", config.pam_service);
+            log::error!(
+                "Please ensure you have a PAM service file at /etc/pam.d/{}",
+                config.pam_service
+            );
             std::process::exit(1);
         }
     };
@@ -902,8 +944,13 @@ fn main() -> Result<(), Box<dyn Error>> {
         // treat as auth failure so the user gets feedback instead of hanging forever.
         if state.auth_pending_seq.is_some() {
             if let Some(at) = state.auth_pending_at {
-                if Instant::now().duration_since(at) >= Duration::from_millis(state.config.auth_timeout) {
-                    log::warn!("Authentication timed out after {} ms", state.config.auth_timeout);
+                if Instant::now().duration_since(at)
+                    >= Duration::from_millis(state.config.auth_timeout)
+                {
+                    log::warn!(
+                        "Authentication timed out after {} ms",
+                        state.config.auth_timeout
+                    );
                     // Clear pending seq so the eventual PAM result is ignored as stale
                     state.auth_pending_seq = None;
                     state.handle_auth_result(false);

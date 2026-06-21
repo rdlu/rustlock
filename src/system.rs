@@ -296,16 +296,25 @@ impl SystemManager {
                                     let action = cmd;
                                     // Fire-and-forget: don't block the polling loop on MPRIS.
                                     tokio::task::spawn_blocking(move || {
-                                        if let Ok(finder) = PlayerFinder::new() {
-                                            if let Ok(player) = finder.find_active() {
-                                                match action {
-                                                    BackendCommand::MediaPlayPause => { let _ = player.play_pause(); }
-                                                    BackendCommand::MediaStop => { let _ = player.stop(); }
-                                                    BackendCommand::MediaNext => { let _ = player.next(); }
-                                                    BackendCommand::MediaPrev => { let _ = player.previous(); }
-                                                    _ => {}
+                                        match PlayerFinder::new() {
+                                            Ok(finder) => {
+                                                match finder.find_active() {
+                                                    Ok(player) => {
+                                                        let result = match action {
+                                                            BackendCommand::MediaPlayPause => player.play_pause(),
+                                                            BackendCommand::MediaStop => player.stop(),
+                                                            BackendCommand::MediaNext => player.next(),
+                                                            BackendCommand::MediaPrev => player.previous(),
+                                                            _ => Ok(()),
+                                                        };
+                                                        if let Err(e) = result {
+                                                            error!("MPRIS command {action:?} failed: {e}");
+                                                        }
+                                                    }
+                                                    Err(e) => error!("No active MPRIS player found: {e}"),
                                                 }
                                             }
+                                            Err(e) => error!("Failed to create MPRIS PlayerFinder: {e}"),
                                         }
                                     });
                                 }
@@ -320,10 +329,7 @@ impl SystemManager {
     }
 
     pub fn get_status(&self) -> SystemStatus {
-        self.status
-            .lock()
-            .map(|s| s.clone())
-            .unwrap_or_default()
+        self.status.lock().map(|s| s.clone()).unwrap_or_default()
     }
 
     pub fn send_command(&self, cmd: BackendCommand) {

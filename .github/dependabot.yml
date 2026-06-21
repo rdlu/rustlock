@@ -16,7 +16,7 @@ updates:
       prefix: "deps"
     reviewers:
       - "JorySeverijnse"
-    versioning-strategy: "increase"
+    versioning-strategy: "auto"
     groups:
       rust-dependencies:
         patterns:

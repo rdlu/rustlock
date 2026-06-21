@@ -292,7 +292,6 @@ pub struct Config {
     /// Timeout (seconds) for system commands (poweroff, reboot, suspend)
     #[arg(long, default_value = "5")]
     pub command_timeout: u64,
-
 }
 
 impl Config {
@@ -347,7 +346,6 @@ impl Config {
 
         config
     }
-
 }
 
 #[cfg(test)]

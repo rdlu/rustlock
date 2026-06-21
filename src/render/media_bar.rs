@@ -15,7 +15,9 @@ impl Renderer {
                     if let Ok(img) = image::load_from_memory(data) {
                         let img = img.to_rgba8();
                         let (w, h) = img.dimensions();
-                        if let Ok(mut surface) = ImageSurface::create(Format::ARgb32, w as i32, h as i32) {
+                        if let Ok(mut surface) =
+                            ImageSurface::create(Format::ARgb32, w as i32, h as i32)
+                        {
                             if let Ok(mut surface_data) = surface.data() {
                                 for y in 0..h {
                                     for x in 0..w {
@@ -72,7 +74,8 @@ impl Renderer {
                 }
             }
 
-            self.context.move_to(text_center_x - te.width() / 2.0, start_y + 20.0);
+            self.context
+                .move_to(text_center_x - te.width() / 2.0, start_y + 20.0);
             render_try!(self.context.show_text(&display_text));
 
             // All media buttons on one row, evenly spaced.
@@ -82,17 +85,18 @@ impl Renderer {
             let btn_y = start_y + 50.0;
 
             // Layout: prev | play_pause | next (centered as a group)
-            let total_buttons: f64 =
-                (self.media_prev_icon_surface.is_some() as u32
-                    + 1
-                    + self.media_next_icon_surface.is_some() as u32) as f64;
+            let total_buttons: f64 = (self.media_prev_icon_surface.is_some() as u32
+                + 1
+                + self.media_next_icon_surface.is_some() as u32)
+                as f64;
             let group_width = (total_buttons - 1.0) * btn_gap + btn_size;
             let group_start_x = center_x - group_width / 2.0;
             let mut btn_x = group_start_x;
 
             if let Some(ref icon) = self.media_prev_icon_surface {
                 self.draw_icon_at(btn_x, btn_y - btn_size / 2.0, icon);
-                self.media_rects.push(("prev", btn_x, btn_y - btn_size / 2.0, btn_size, btn_size));
+                self.media_rects
+                    .push(("prev", btn_x, btn_y - btn_size / 2.0, btn_size, btn_size));
                 btn_x += btn_gap;
             }
 
@@ -100,17 +104,30 @@ impl Renderer {
             if self.system_status.media_playing {
                 if let Some(ref icon) = self.media_pause_icon_surface {
                     self.draw_icon_at(btn_x, btn_y - btn_size / 2.0, icon);
-                    self.media_rects.push(("play_pause", btn_x, btn_y - btn_size / 2.0, btn_size, btn_size));
+                    self.media_rects.push((
+                        "play_pause",
+                        btn_x,
+                        btn_y - btn_size / 2.0,
+                        btn_size,
+                        btn_size,
+                    ));
                 }
             } else if let Some(ref icon) = self.media_play_icon_surface {
                 self.draw_icon_at(btn_x, btn_y - btn_size / 2.0, icon);
-                self.media_rects.push(("play_pause", btn_x, btn_y - btn_size / 2.0, btn_size, btn_size));
+                self.media_rects.push((
+                    "play_pause",
+                    btn_x,
+                    btn_y - btn_size / 2.0,
+                    btn_size,
+                    btn_size,
+                ));
             }
             btn_x += btn_gap;
 
             if let Some(ref icon) = self.media_next_icon_surface {
                 self.draw_icon_at(btn_x, btn_y - btn_size / 2.0, icon);
-                self.media_rects.push(("next", btn_x, btn_y - btn_size / 2.0, btn_size, btn_size));
+                self.media_rects
+                    .push(("next", btn_x, btn_y - btn_size / 2.0, btn_size, btn_size));
             }
         }
     }

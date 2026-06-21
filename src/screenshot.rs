@@ -92,7 +92,10 @@ impl Screenshot {
             }
         }
 
-        let mut surface_data = self.surface.data().context("swirl: failed to write surface data")?;
+        let mut surface_data = self
+            .surface
+            .data()
+            .context("swirl: failed to write surface data")?;
         surface_data.copy_from_slice(&data);
         Ok(())
     }
@@ -131,7 +134,10 @@ impl Screenshot {
             }
         }
 
-        let mut surface_data = self.surface.data().context("melting: failed to write surface data")?;
+        let mut surface_data = self
+            .surface
+            .data()
+            .context("melting: failed to write surface data")?;
         surface_data.copy_from_slice(&data);
         Ok(())
     }
@@ -194,7 +200,10 @@ impl Screenshot {
             }
         }
 
-        let mut surface_data = self.surface.data().context("pixelate: failed to write surface data")?;
+        let mut surface_data = self
+            .surface
+            .data()
+            .context("pixelate: failed to write surface data")?;
         surface_data.copy_from_slice(&data);
         Ok(())
     }
@@ -231,18 +240,12 @@ impl Screenshot {
                 .context("blur: failed to create image buffer")?;
 
         for _ in 0..times {
-            let mut rgb_data: Vec<[u8; 3]> =
-                Vec::with_capacity(width * height);
+            let mut rgb_data: Vec<[u8; 3]> = Vec::with_capacity(width * height);
             for pixel in img.pixels() {
                 rgb_data.push([pixel[0], pixel[1], pixel[2]]);
             }
 
-            fastblur::gaussian_blur(
-                &mut rgb_data,
-                width,
-                height,
-                radius as f32,
-            );
+            fastblur::gaussian_blur(&mut rgb_data, width, height, radius as f32);
 
             for (i, pixel) in img.pixels_mut().enumerate() {
                 pixel[0] = rgb_data[i][0];
@@ -292,7 +295,10 @@ impl Screenshot {
             }
         }
 
-        let mut surface_data = self.surface.data().context("vignette: failed to write surface data")?;
+        let mut surface_data = self
+            .surface
+            .data()
+            .context("vignette: failed to write surface data")?;
         surface_data.copy_from_slice(&data);
         Ok(())
     }

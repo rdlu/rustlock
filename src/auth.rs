@@ -13,7 +13,8 @@ use zeroize::Zeroizing;
 type AuthChannels = (
     channel::Sender<(Zeroizing<String>, u64)>,
     channel::Channel<(bool, u64)>,
-);pub struct LockConversation {
+);
+pub struct LockConversation {
     pub password: Option<Zeroizing<String>>,
 }
 
@@ -39,13 +40,10 @@ impl pam_client::ConversationHandler for LockConversation {
     }
 }
 
-pub fn create_and_run_auth_loop(
-    service_name: String,
-) -> Option<AuthChannels> {
+pub fn create_and_run_auth_loop(service_name: String) -> Option<AuthChannels> {
     let username = username();
 
-    let (auth_req_send, auth_req_recv) =
-        channel::channel::<(Zeroizing<String>, u64)>();
+    let (auth_req_send, auth_req_recv) = channel::channel::<(Zeroizing<String>, u64)>();
     let (auth_res_send, auth_res_recv) = channel::channel::<(bool, u64)>();
 
     thread::spawn(move || {
@@ -55,20 +53,21 @@ pub fn create_and_run_auth_loop(
         // Creating a new context each time is expensive because it
         // re-parses configs and re-loads shared libraries for every attempt.
         let conversation = LockConversation { password: None };
-        let mut context = match Context::new(service_name.as_str(), Some(username.as_str()), conversation) {
-            Ok(ctx) => {
-                debug!("Prepared to authenticate user '{}'", username);
-                ctx
-            }
-            Err(err) => {
-                error!("Failed to initialize PAM context: {:?}", err);
+        let mut context =
+            match Context::new(service_name.as_str(), Some(username.as_str()), conversation) {
+                Ok(ctx) => {
+                    debug!("Prepared to authenticate user '{}'", username);
+                    ctx
+                }
+                Err(err) => {
+                    error!("Failed to initialize PAM context: {:?}", err);
                     error!(
                         "Ensure that the PAM service '{}' is correctly configured.",
                         service_name
-                );
-                return;
-            }
-        };
+                    );
+                    return;
+                }
+            };
 
         let running = Arc::new(AtomicBool::new(true));
         let running_clone = running.clone();

@@ -165,7 +165,8 @@ impl InputHandler {
     /// Check if key highlight should be shown
     pub fn should_show_key_highlight(&self) -> bool {
         if let Some(timer) = self.key_highlight_timer {
-            timer.elapsed() < std::time::Duration::from_millis(self.config.key_highlight_window_duration)
+            timer.elapsed()
+                < std::time::Duration::from_millis(self.config.key_highlight_window_duration)
         } else {
             false
         }

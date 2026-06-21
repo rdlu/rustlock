@@ -31,6 +31,8 @@ pub struct LockedSurface {
     /// Last clock minute (unix-minute) we rendered, to detect %H:%M rollover.
     last_minute: i64,
     ctrl_held: bool,
+    /// Set by clicking on the indicator ring. Persists until clicked again.
+    peek_toggled: bool,
 }
 
 impl LockedSurface {
@@ -64,6 +66,7 @@ impl LockedSurface {
             dirty: true,
             last_minute: i64::MIN,
             ctrl_held: false,
+            peek_toggled: false,
         })
     }
 
@@ -182,11 +185,21 @@ impl LockedSurface {
         }
 
         if !self.config.hide_password {
+            let buf = self.input_handler.password_buffer();
             let length = self.input_handler.password_length();
-            if self.ctrl_held {
-                self.renderer
-                    .peek_password(self.input_handler.password_buffer().as_str());
+            if self.ctrl_held || self.peek_toggled {
+                log::debug!(
+                    "LockedSurface::update: PEEK mode (ctrl={}, toggled={})",
+                    self.ctrl_held,
+                    self.peek_toggled
+                );
+                self.renderer.peek_password(buf.as_str());
             } else {
+                log::debug!(
+                    "LockedSurface::update: DOT mode (ctrl={}, toggled={})",
+                    self.ctrl_held,
+                    self.peek_toggled
+                );
                 self.renderer.set_password_display(length);
             }
         }
@@ -301,6 +314,14 @@ impl LockedSurface {
             self.ctrl_held = held;
             self.dirty = true;
         }
+    }
+
+    /// Toggle peek mode on/off. Called when the user clicks on the indicator
+    /// ring. Persists until toggled again (unlike Ctrl-hold which is transient).
+    pub fn toggle_peek(&mut self) {
+        self.peek_toggled = !self.peek_toggled;
+        log::debug!("toggle_peek: peek_toggled = {}", self.peek_toggled);
+        self.dirty = true;
     }
 }
 

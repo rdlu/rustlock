@@ -75,29 +75,50 @@ impl Renderer {
         let thickness = self.config.indicator_thickness as f64;
         let shape = self.config.ring_shape;
 
-        self.context.new_path();
-        self.context.set_source_rgba(1.0, 1.0, 1.0, self.fade_alpha);
+        let max_dots = self.config.max_dots as f64;
+        let dot_radius = radius - thickness - 10.0;
+        let t_offset = ring_shape::top_centre_offset(shape);
 
         let count = self.password_display.len();
         if count == 0 {
             return;
         }
 
-        let max_dots = self.config.max_dots as f64;
-        let dot_radius = radius - thickness - 10.0;
-        let t_offset = ring_shape::top_centre_offset(shape);
+        if self.peeking {
+            log::debug!("draw_password_display: PEEKING text ({} chars)", count);
+            // Draw each character at the same ring-perimeter positions as dots
+            self.context.set_font_size(11.0);
+            self.context.set_source_rgba(1.0, 1.0, 1.0, self.fade_alpha);
+            for (i, ch) in self.password_display.chars().enumerate() {
+                let t = (i as f64 / max_dots) + t_offset;
+                let (x, y) = ring_shape::perimeter_point(center_x, center_y, dot_radius, shape, t);
 
-        for i in 0..count {
-            let t = (i as f64 / max_dots) + t_offset;
-            let (x, y) = ring_shape::perimeter_point(center_x, center_y, dot_radius, shape, t);
-
+                let mut ch_str = String::new();
+                ch_str.push(ch);
+                let te = render_try!(self.context.text_extents(&ch_str));
+                self.context.new_path();
+                self.context.move_to(
+                    x - te.x_bearing() - te.width() / 2.0,
+                    y - te.y_bearing() - te.height() / 2.0,
+                );
+                render_try!(self.context.show_text(&ch_str));
+            }
+        } else {
             self.context.new_path();
-            self.context.arc(x, y, 4.0, 0.0, 2.0 * std::f64::consts::PI);
-            render_try!(self.context.fill());
+            self.context.set_source_rgba(1.0, 1.0, 1.0, self.fade_alpha);
+
+            for i in 0..count {
+                let t = (i as f64 / max_dots) + t_offset;
+                let (x, y) = ring_shape::perimeter_point(center_x, center_y, dot_radius, shape, t);
+
+                self.context.new_path();
+                self.context.arc(x, y, 4.0, 0.0, 2.0 * std::f64::consts::PI);
+                render_try!(self.context.fill());
+            }
         }
 
-        // Cursor indicator
-        if self.fade_alpha > 0.0 && self.cursor_position > 0 {
+        // Cursor indicator (shared between peek and dot modes)
+        if self.fade_alpha > 0.0 {
             let cursor_t = ((self.cursor_position as f64 - 0.5) / max_dots) + t_offset;
             let (cx, cy) =
                 ring_shape::perimeter_point(center_x, center_y, dot_radius, shape, cursor_t);

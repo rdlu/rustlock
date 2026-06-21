@@ -28,8 +28,27 @@
       nativeBuildInputs = [
         pkgs.pkg-config
         pkgs.rustPlatform.bindgenHook
-        pkgs.rustfmt
-        pkgs.clippy
+      ];
+    };
+
+    devShells.${system}.default = pkgs.mkShell {
+      packages = with pkgs; [
+        cargo
+        rustc
+        rustfmt
+        clippy
+        cargo-audit
+        cargo-deny
+        prek
+        pkg-config
+        rustPlatform.bindgenHook
+        cairo
+        pam
+        gdk-pixbuf
+        librsvg
+        pango
+        libxkbcommon
+        dbus
       ];
     };
   };
