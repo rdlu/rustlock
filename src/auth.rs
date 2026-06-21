@@ -1,5 +1,8 @@
 use std::ffi::{CStr, CString};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::thread;
+use std::time::Duration;
 
 use log::{debug, error};
 use pam_client::{Context, ErrorCode, Flag};
@@ -7,9 +10,10 @@ use smithay_client_toolkit::reexports::{calloop::channel, calloop::EventLoop};
 use whoami::username;
 use zeroize::Zeroizing;
 
-const SERVICE_NAME: &str = "rustlock";
-
-pub struct LockConversation {
+type AuthChannels = (
+    channel::Sender<(Zeroizing<String>, u64)>,
+    channel::Channel<(bool, u64)>,
+);pub struct LockConversation {
     pub password: Option<Zeroizing<String>>,
 }
 
@@ -36,59 +40,65 @@ impl pam_client::ConversationHandler for LockConversation {
 }
 
 pub fn create_and_run_auth_loop(
-) -> Option<(channel::Sender<Zeroizing<String>>, channel::Channel<bool>)> {
+    service_name: String,
+) -> Option<AuthChannels> {
     let username = username();
 
-    let conversation = LockConversation { password: None };
-    match Context::new(SERVICE_NAME, Some(username.as_str()), conversation) {
-        Ok(_) => {
-            debug!("Prepared to authenticate user '{}'", username);
-        }
-        Err(err) => {
-            error!("Failed to initialize PAM context: {:?}", err);
-            error!(
-                "Ensure that the PAM service '{}' is correctly configured.",
-                SERVICE_NAME
-            );
-            return None;
-        }
-    }
-
-    let (auth_req_send, auth_req_recv) = channel::channel::<Zeroizing<String>>();
-    let (auth_res_send, auth_res_recv) = channel::channel::<bool>();
+    let (auth_req_send, auth_req_recv) =
+        channel::channel::<(Zeroizing<String>, u64)>();
+    let (auth_res_send, auth_res_recv) = channel::channel::<(bool, u64)>();
 
     thread::spawn(move || {
         let mut event_loop: EventLoop<()> = EventLoop::try_new().unwrap();
+
+        // Create PAM context once and reuse it for all auth attempts.
+        // Creating a new context each time is expensive because it
+        // re-parses configs and re-loads shared libraries for every attempt.
+        let conversation = LockConversation { password: None };
+        let mut context = match Context::new(service_name.as_str(), Some(username.as_str()), conversation) {
+            Ok(ctx) => {
+                debug!("Prepared to authenticate user '{}'", username);
+                ctx
+            }
+            Err(err) => {
+                error!("Failed to initialize PAM context: {:?}", err);
+                    error!(
+                        "Ensure that the PAM service '{}' is correctly configured.",
+                        service_name
+                );
+                return;
+            }
+        };
+
+        let running = Arc::new(AtomicBool::new(true));
+        let running_clone = running.clone();
+
         event_loop
             .handle()
-            .insert_source(auth_req_recv, |evt, _metadata, _state| match evt {
-                channel::Event::Msg(password) => {
-                    let conversation = LockConversation {
-                        password: Some(password),
-                    };
-                    match Context::new(SERVICE_NAME, Some(username.as_str()), conversation) {
-                        Ok(mut context) => match context.authenticate(Flag::NONE) {
-                            Ok(()) => {
-                                auth_res_send.send(true).unwrap();
-                            }
-                            Err(err) => {
-                                error!("Pam authenticate failed with {:?}", err);
-                                auth_res_send.send(false).unwrap();
-                            }
-                        },
+            .insert_source(auth_req_recv, move |evt, _metadata, _state| match evt {
+                channel::Event::Msg((password, seq)) => {
+                    context.conversation_mut().password = Some(password);
+                    match context.authenticate(Flag::NONE) {
+                        Ok(()) => {
+                            let _ = auth_res_send.send((true, seq));
+                        }
                         Err(err) => {
-                            error!("Failed to re-initialize PAM context: {:?}", err);
-                            auth_res_send.send(false).unwrap();
+                            error!("Pam authenticate failed with {:?}", err);
+                            let _ = auth_res_send.send((false, seq));
                         }
                     }
                 }
-                channel::Event::Closed => {}
+                channel::Event::Closed => {
+                    running_clone.store(false, Ordering::SeqCst);
+                }
             })
             .unwrap();
 
-        loop {
-            event_loop.dispatch(None, &mut ()).expect("Failed to run");
+        while running.load(Ordering::SeqCst) {
+            let _ = event_loop.dispatch(Some(Duration::from_millis(100)), &mut ());
         }
+
+        debug!("PAM auth thread exiting cleanly");
     });
 
     Some((auth_req_send, auth_res_recv))

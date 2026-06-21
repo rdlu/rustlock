@@ -48,21 +48,40 @@ use smithay_client_toolkit::{
 static FILE_LOGGER: std::sync::LazyLock<std::sync::Mutex<Option<std::fs::File>>> =
     std::sync::LazyLock::new(|| std::sync::Mutex::new(None));
 
-fn setup_file_logging(_config: &Config) {
-    let log_path = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string()) + "/.rustlock.log";
-
-    match OpenOptions::new()
-        .create(true)
-        .write(true)
-        .truncate(true)
-        .open(&log_path)
-    {
-        Ok(file) => {
-            *FILE_LOGGER.lock().unwrap() = Some(file);
-            eprintln!("Logging to: {}", log_path);
+fn setup_file_logging(config: &Config) {
+    if let Some(ref path) = config.log_path {
+        match OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(path)
+        {
+            Ok(file) => {
+                *FILE_LOGGER.lock().unwrap() = Some(file);
+                eprintln!("Logging to: {}", path.display());
+            }
+            Err(e) => {
+                eprintln!("Failed to open log file {}: {}", path.display(), e);
+            }
         }
-        Err(e) => {
-            eprintln!("Failed to open log file {}: {}", log_path, e);
+    } else if config.log_file {
+        let default_path = std::path::PathBuf::from(
+            std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string()),
+        )
+        .join(".rustlock.log");
+        match OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(&default_path)
+        {
+            Ok(file) => {
+                *FILE_LOGGER.lock().unwrap() = Some(file);
+                eprintln!("Logging to: {}", default_path.display());
+            }
+            Err(e) => {
+                eprintln!("Failed to open log file {}: {}", default_path.display(), e);
+            }
         }
     }
 }
@@ -110,7 +129,9 @@ struct WaylandLock {
     lock_manager: Arc<Mutex<LockManager>>,
     config: Config,
     ctrlc_exit: Arc<std::sync::atomic::AtomicBool>,
-    auth_tx: Option<calloop::channel::Sender<Zeroizing<String>>>,
+    auth_tx: Option<calloop::channel::Sender<(Zeroizing<String>, u64)>>,
+    auth_seq: u64,
+    auth_pending_seq: Option<u64>,
     compositor_state: CompositorState,
     output_state: OutputState,
     registry_state: RegistryState,
@@ -127,6 +148,7 @@ struct WaylandLock {
     exit: bool,
     screenshot_manager: Option<ScreenshotManager>,
     grace_until: Option<Instant>,
+    auth_pending_at: Option<Instant>,
     system_manager: Arc<SystemManager>,
     modifiers: Modifiers,
     current_layout: u32,
@@ -134,8 +156,10 @@ struct WaylandLock {
 
 impl WaylandLock {
     fn handle_auth_result(&mut self, success: bool) {
-        // Clear grace period on any auth result
+        // Clear grace period and auth pending on any auth result
         self.grace_until = None;
+        self.auth_pending_at = None;
+        self.auth_pending_seq = None;
 
         if success {
             log::info!("✅ Authentication successful - unlocking session");
@@ -148,13 +172,13 @@ impl WaylandLock {
                 session_lock.unlock();
                 let _ = self.conn.flush();
                 self.exit = true;
-                log::debug!("Unlock requested - exiting");
+                log::info!("Unlock requested - exiting");
             } else {
                 log::error!("No session_lock available to unlock!");
                 self.exit = true;
             }
         } else {
-            log::warn!("❌ Authentication failed - wrong password");
+            log::error!("❌ Authentication failed - wrong password");
             if let Ok(mut lock_manager) = self.lock_manager.lock() {
                 for surface in &mut lock_manager.surfaces {
                     surface.show_wrong_password();
@@ -193,17 +217,17 @@ impl WaylandLock {
             }
             Keysym::F1 => {
                 self.system_manager
-                    .send_command(system::SystemCommand::Suspend);
+                    .send_command(system::BackendCommand::Suspend);
                 return;
             }
             Keysym::F2 => {
                 self.system_manager
-                    .send_command(system::SystemCommand::Reboot);
+                    .send_command(system::BackendCommand::Reboot);
                 return;
             }
             Keysym::F3 => {
                 self.system_manager
-                    .send_command(system::SystemCommand::PowerOff);
+                    .send_command(system::BackendCommand::PowerOff);
                 return;
             }
             _ => {}
@@ -220,30 +244,44 @@ impl WaylandLock {
         }
 
         if event.keysym == Keysym::Return {
+            // Debounce: skip if auth is already pending (user pressed Enter twice)
+            if self.auth_pending_at.is_some() {
+                return;
+            }
+
             log::info!("Enter pressed - submitting password");
-            if let Ok(mut lock_manager) = self.lock_manager.lock() {
-                let mut password = Zeroizing::new(String::new());
-                let modifiers = self.modifiers;
-                for surface in &mut lock_manager.surfaces {
-                    if let Some(InputAction::SubmitPassword(p)) =
-                        surface.handle_key_event(event.clone(), modifiers)
-                    {
-                        password = p;
+            let password: Option<Zeroizing<String>> = self
+                .lock_manager
+                .lock()
+                .ok()
+                .and_then(|mut lm| lm.handle_key_event(event, self.modifiers))
+                .and_then(|action| {
+                    if let InputAction::SubmitPassword(p) = action {
+                        (!p.is_empty()).then_some(p)
+                    } else {
+                        None
+                    }
+                });
+
+            if let Some(password) = password {
+                self.auth_seq += 1;
+                self.auth_pending_at = Some(Instant::now());
+                self.auth_pending_seq = Some(self.auth_seq);
+                // Show verifying feedback on ALL surfaces BEFORE sending to PAM.
+                if let Ok(mut lock_manager) = self.lock_manager.lock() {
+                    for surface in &mut lock_manager.surfaces {
+                        surface.show_verifying();
                     }
                 }
-                if !password.is_empty() {
-                    if let Some(tx) = &self.auth_tx {
-                        let _ = tx.send(password);
-                    }
+                if let Some(tx) = &self.auth_tx {
+                    let _ = tx.send((password, self.auth_seq));
                 }
             }
         } else {
-            let modifiers = self.modifiers;
-            let _action = self
-                .lock_manager
+            self.lock_manager
                 .lock()
-                .map(|mut lm| lm.handle_key_event(event, modifiers))
-                .unwrap_or(None);
+                .ok()
+                .and_then(|mut lm| lm.handle_key_event(event, self.modifiers));
         }
     }
 }
@@ -470,6 +508,9 @@ impl KeyboardHandler for WaylandLock {
     ) {
         self.modifiers = modifiers;
         self.current_layout = layout;
+        if let Ok(mut lock_manager) = self.lock_manager.lock() {
+            lock_manager.set_ctrl_held(modifiers.ctrl);
+        }
     }
 }
 
@@ -552,7 +593,10 @@ impl Dispatch<ZwlrScreencopyFrameV1, CaptureData> for WaylandLock {
                 height,
                 stride,
             } => {
-                let format = format.into_result().unwrap();
+                let Ok(format) = format.into_result() else {
+                    log::error!("Screencopy: invalid buffer format, skipping capture");
+                    return;
+                };
 
                 let mut info = data.info.lock().unwrap();
                 *info = Some(screenshot::BufferInfo {
@@ -581,7 +625,11 @@ impl Dispatch<ZwlrScreencopyFrameV1, CaptureData> for WaylandLock {
                 }
             }
             Event::Flags { flags } => {
-                *data.flags.lock().unwrap() = Some(flags.into_result().unwrap());
+                if let Ok(f) = flags.into_result() {
+                    *data.flags.lock().unwrap() = Some(f);
+                } else {
+                    log::error!("Screencopy: invalid flags, skipping");
+                }
             }
             Event::Ready { .. } => {
                 log::info!("Screencopy: Ready for output {}", data.output_idx);
@@ -601,7 +649,9 @@ impl Dispatch<ZwlrScreencopyFrameV1, CaptureData> for WaylandLock {
                         };
                         if let Ok(surface) = mgr.buffer_to_surface(handle, &mut pool) {
                             let mut ss = Screenshot::new(surface);
-                            let _ = ss.apply_effects(&state.config);
+                            if let Err(e) = ss.apply_effects(&state.config) {
+                                log::error!("Failed to apply effects to screenshot {}: {e}", data.output_idx);
+                            }
                             if data.output_idx < state.captured_backgrounds.len() {
                                 state.captured_backgrounds[data.output_idx] = Some(ss.into_inner());
                             }
@@ -683,9 +733,15 @@ wayland_client::delegate_noop!(WaylandLock: ignore wayland_client::protocol::wl_
 
 fn main() -> Result<(), Box<dyn Error>> {
     let config = Config::load();
+
     setup_file_logging(&config);
     static LOGGER: DualLogger = DualLogger;
-    log::set_logger(&LOGGER).map(|()| log::set_max_level(log::LevelFilter::Debug))?;
+    let max_level = if config.debug {
+        log::LevelFilter::Debug
+    } else {
+        log::LevelFilter::Info
+    };
+    log::set_logger(&LOGGER).map(|()| log::set_max_level(max_level))?;
 
     log::info!("Starting rustlock v{}", env!("CARGO_PKG_VERSION"));
     #[allow(clippy::arc_with_non_send_sync)]
@@ -699,13 +755,14 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let shm_state = Shm::bind(&globals, &qh).map_err(|_| "wl_shm not supported")?;
 
-    let system_manager = Arc::new(SystemManager::new());
+    let system_manager = Arc::new(SystemManager::new(&config));
 
-    let (auth_tx_actual, auth_feedback_rx_actual) = match auth::create_and_run_auth_loop() {
+    let (auth_tx_actual, auth_feedback_rx_actual) =
+    match auth::create_and_run_auth_loop(config.pam_service.clone()) {
         Some(channels) => channels,
         None => {
             log::error!("Failed to initialize authentication. This usually means PAM is not configured correctly.");
-            log::error!("Please ensure you have a PAM service file at /etc/pam.d/rustlock");
+            log::error!("Please ensure you have a PAM service file at /etc/pam.d/{}", config.pam_service);
             std::process::exit(1);
         }
     };
@@ -740,6 +797,9 @@ fn main() -> Result<(), Box<dyn Error>> {
         exit: false,
         screenshot_manager: ScreenshotManager::new(&globals, &qh).ok(),
         grace_until: None,
+        auth_pending_at: None,
+        auth_seq: 0,
+        auth_pending_seq: None,
         system_manager: system_manager.clone(),
         modifiers: Modifiers::default(),
         current_layout: 0,
@@ -753,31 +813,41 @@ fn main() -> Result<(), Box<dyn Error>> {
         if let Ok(img) = image::open(image_path) {
             let img = img.to_rgba8();
             let (w, h) = img.dimensions();
-            let mut surface =
-                cairo::ImageSurface::create(cairo::Format::ARgb32, w as i32, h as i32).unwrap();
+            if let Ok(mut surface) =
+                cairo::ImageSurface::create(cairo::Format::ARgb32, w as i32, h as i32)
             {
-                let mut surface_data = surface.data().unwrap();
-                for y in 0..h {
-                    for x in 0..w {
-                        let pixel = img.get_pixel(x, y);
-                        let idx = ((y * w + x) * 4) as usize;
-                        surface_data[idx] = pixel[2]; // B
-                        surface_data[idx + 1] = pixel[1]; // G
-                        surface_data[idx + 2] = pixel[0]; // R
-                        surface_data[idx + 3] = pixel[3]; // A
+                let image_ok = {
+                    if let Ok(mut surface_data) = surface.data() {
+                        for y in 0..h {
+                            for x in 0..w {
+                                let pixel = img.get_pixel(x, y);
+                                let idx = ((y * w + x) * 4) as usize;
+                                surface_data[idx] = pixel[2];
+                                surface_data[idx + 1] = pixel[1];
+                                surface_data[idx + 2] = pixel[0];
+                                surface_data[idx + 3] = pixel[3];
+                            }
+                        }
+                        true
+                    } else {
+                        log::error!("Failed to get background image surface data");
+                        false
                     }
+                };
+                if image_ok {
+                    let mut ss = Screenshot::new(surface);
+                    if let Err(e) = ss.apply_effects(&state.config) {
+                        log::error!("Failed to apply effects to custom background image: {e}");
+                    }
+                    let surface = ss.into_inner();
+
+                    let num_outputs = state.output_state.outputs().count();
+                    state.captured_backgrounds = vec![Some(surface); num_outputs];
+                    state.config.screenshots = false;
                 }
+            } else {
+                log::error!("Failed to create Cairo surface for background image");
             }
-
-            let mut ss = Screenshot::new(surface);
-            let _ = ss.apply_effects(&state.config);
-            let surface = ss.into_inner();
-
-            let num_outputs = state.output_state.outputs().count();
-            state.captured_backgrounds = vec![Some(surface); num_outputs];
-
-            // Disable screenshots if image was successfully loaded
-            state.config.screenshots = false;
         } else {
             log::error!(
                 "Failed to load custom background image from {:?}",
@@ -811,8 +881,11 @@ fn main() -> Result<(), Box<dyn Error>> {
     event_loop
         .handle()
         .insert_source(auth_feedback_rx_actual, |event, _, state| {
-            if let calloop::channel::Event::Msg(success) = event {
-                state.handle_auth_result(success);
+            if let calloop::channel::Event::Msg((success, seq)) = event {
+                // Ignore stale auth results from previous requests (e.g. after timeout or retry).
+                if state.auth_pending_seq == Some(seq) {
+                    state.handle_auth_result(success);
+                }
             }
         })?;
 
@@ -822,6 +895,19 @@ fn main() -> Result<(), Box<dyn Error>> {
         if let Some(grace_until) = state.grace_until {
             if Instant::now() >= grace_until {
                 state.grace_until = None;
+            }
+        }
+
+        // Auth timeout: if PAM thread doesn't respond within config.auth_timeout ms,
+        // treat as auth failure so the user gets feedback instead of hanging forever.
+        if state.auth_pending_seq.is_some() {
+            if let Some(at) = state.auth_pending_at {
+                if Instant::now().duration_since(at) >= Duration::from_millis(state.config.auth_timeout) {
+                    log::warn!("Authentication timed out after {} ms", state.config.auth_timeout);
+                    // Clear pending seq so the eventual PAM result is ignored as stale
+                    state.auth_pending_seq = None;
+                    state.handle_auth_result(false);
+                }
             }
         }
 

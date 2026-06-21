@@ -5,181 +5,13 @@ on:
     tags:
       - 'v*'
 
-env:
-  CARGO_TERM_COLOR: always
-
 jobs:
-  release-build-x86:
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - variant: "default"
-            args: ""
-            distro: "ubuntu"
-          - variant: "no-networking"
-            args: "--no-default-features"
-            distro: "ubuntu"
-          - variant: "default"
-            args: ""
-            distro: "debian"
-          - variant: "default"
-            args: ""
-            distro: "fedora"
-          - variant: "default"
-            args: ""
-            distro: "arch"
-    container: ${{ matrix.distro == 'ubuntu' && 'ubuntu:latest' || matrix.distro == 'debian' && 'debian:stable-slim' || matrix.distro == 'fedora' && 'fedora:latest' || 'archlinux:latest' }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Install system dependencies (Ubuntu/Debian)
-        if: matrix.distro == 'ubuntu' || matrix.distro == 'debian'
-        run: |
-          apt-get update
-          apt-get install -y \
-            curl \
-            llvm clang libclang-dev \
-            pkg-config \
-            libglib2.0-dev libcairo2-dev libpango1.0-dev libatk1.0-dev \
-            libgdk-pixbuf-2.0-dev libpam0g-dev libdbus-1-dev \
-            libwayland-dev libxkbcommon-dev
-
-      - name: Install system dependencies (Fedora)
-        if: matrix.distro == 'fedora'
-        run: |
-          dnf install -y \
-            curl \
-            llvm clang clang-devel \
-            pkgconfig \
-            glib2-devel cairo-devel cairo-gobject-devel pango-devel atk-devel \
-            gdk-pixbuf2-devel pam-devel dbus-devel \
-            wayland-devel libxkbcommon-devel
-
-      - name: Install system dependencies (Arch)
-        if: matrix.distro == 'arch'
-        run: |
-          pacman -Sy --noconfirm \
-            base-devel \
-            llvm clang pkgconf \
-            glib2 cairo pango atk gdk-pixbuf2 \
-            pam dbus \
-            wayland libxkbcommon
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Build ${{ matrix.variant }} (${{ matrix.distro }})
-        run: cargo build --release ${{ matrix.args }}
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: rustlock-${{ matrix.variant }}-${{ matrix.distro }}
-          path: target/release/rustlock
-
-  release-build-arm64:
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - variant: "default"
-            args: ""
-            target: "aarch64-unknown-linux-gnu"
-          - variant: "no-networking"
-            args: "--no-default-features"
-            target: "aarch64-unknown-linux-gnu"
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Install cross-compilation toolchain
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y \
-            curl \
-            llvm clang libclang-dev \
-            pkg-config \
-            libglib2.0-dev libcairo2-dev libpango1.0-dev libatk1.0-dev \
-            libgdk-pixbuf-2.0-dev libpam0g-dev libdbus-1-dev \
-            libwayland-dev libxkbcommon-dev \
-            gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
-
-      - name: Add ARM target
-        run: rustup target add aarch64-unknown-linux-gnu
-
-      - name: Configure cross-compilation linker
-        run: |
-          mkdir -p ~/.cargo
-          echo '[target.aarch64-unknown-linux-gnu]
-          linker = "aarch64-linux-gnu-gcc"' >> ~/.cargo/config.toml
-
-      - name: Build ${{ matrix.variant }} (ARM64)
-        run: cargo build --release --target aarch64-unknown-linux-gnu ${{ matrix.args }}
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: rustlock-${{ matrix.variant }}-arm64
-          path: target/aarch64-unknown-linux-gnu/release/rustlock
-
-  publish-crates:
-    runs-on: ubuntu-latest
-    needs: [release-build-x86]
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Publish to crates.io
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        run: cargo publish
-
   release:
     runs-on: ubuntu-latest
-    needs: [release-build-x86, release-build-arm64, publish-crates]
     permissions:
       contents: write
     steps:
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-
-      - name: Download all artifacts
-        uses: actions/download-artifact@v8
-        with:
-          path: artifacts
-
-      - name: Generate checksums
-        working-directory: artifacts
-        run: |
-          find . -type f -name "rustlock" -exec sha256sum {} \; > SHA256SUMS.txt
-          cat SHA256SUMS.txt
-
-      - name: Import GPG key
-        id: import_gpg
-        uses: crazy-max/ghaction-import-gpg@v7
-        with:
-          gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
-          passphrase: ${{ secrets.GPG_PASSPHRASE }}
-          git_config_global: true
-          git_user_name: JorySeverijnse
-          git_user_email: jory@severijnse.com
-
-      - name: Sign checksums
-        working-directory: artifacts
-        run: |
-          gpg --armor --detach-sign SHA256SUMS.txt
+      - uses: actions/checkout@v6
 
       - name: Determine tag
         id: tag
@@ -192,14 +24,18 @@ jobs:
           name: RustLock v${{ steps.tag.outputs.VERSION }}
           draft: true
           prerelease: ${{ contains(github.ref_name, 'alpha') || contains(github.ref_name, 'beta') }}
-          files: |
-            artifacts/rustlock-default-ubuntu/rustlock
-            artifacts/rustlock-no-networking-ubuntu/rustlock
-            artifacts/rustlock-default-debian/rustlock
-            artifacts/rustlock-default-fedora/rustlock
-            artifacts/rustlock-default-arch/rustlock
-            artifacts/rustlock-default-arm64/rustlock
-            artifacts/rustlock-no-networking-arm64/rustlock
-            artifacts/SHA256SUMS.txt
-            artifacts/SHA256SUMS.txt.asc
           generate_release_notes: true
+
+  publish-crates:
+    runs-on: ubuntu-latest
+    needs: [release]
+    if: secrets.CARGO_REGISTRY_TOKEN != ''
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Publish to crates.io
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish

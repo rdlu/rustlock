@@ -12,30 +12,24 @@ wayland-client = { version = "0.31" }
 wayland-protocols = { version = "0.32", features = ["client"] }
 wayland-protocols-wlr = { version = "0.3", features = ["client"] }
 anyhow = "1.0"
-futures = { version = "0.3", default-features = false, features = ["std"] }
 cairo-rs = { version = "0.20", default-features = false, features = ["png"] }
 gdk-pixbuf = { version = "0.20", default-features = false, features = ["v2_40"] }
-gio = { version = "0.20" }
 pangocairo = { version = "0.20" }
 clap = { version = "4.6", default-features = false, features = ["derive", "std", "help", "usage", "error-context"] }
 toml = { version = "1.1", default-features = false, features = ["parse", "display", "serde"] }
 serde = { version = "1.0", default-features = false, features = ["derive", "std"] }
 zeroize = "1.8"
 log = "0.4"
-env_logger = { version = "0.11", default-features = false, features = ["color", "humantime"] }
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 whoami = "1.6"
 zbus = { version = "5.14", default-features = false, features = ["tokio"] }
 mpris = "2.0"
 tokio = { version = "1.51", default-features = false, features = ["rt", "rt-multi-thread", "macros", "time", "sync"] }
-num-traits = { version = "0.2" }
 rand = { version = "0.10" }
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"], optional = true }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
     fastblur = "0.1"
     pam-client = "0.5"
-    thiserror = "1.0"
-    bytemuck = "1.25"
     calloop = "0.13"
     xkbcommon = "0.7"
     calloop-wayland-source = "0.3"

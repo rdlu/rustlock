@@ -4,7 +4,7 @@ documentation:
 
 features:
   - changed-files:
-      - any-glob-to-any-file: ['src/input.rs', 'src/lock.rs', 'src/config.rs']
+      - any-glob-to-any-file: ['src/input.rs', 'src/lock.rs', 'src/config.rs', 'src/auth.rs', 'src/screenshot.rs', 'src/system.rs']
 
 rendering:
   - changed-files:
@@ -20,4 +20,4 @@ dependencies:
 
 refactoring:
   - changed-files:
-      - any-glob-to-any-file: ['src/util.rs', 'src/system.rs', 'src/main.rs']
+      - any-glob-to-any-file: ['src/util.rs', 'src/main.rs']

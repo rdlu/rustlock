@@ -21,22 +21,30 @@ pub struct SystemStatus {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub enum SystemCommand {
+pub enum BackendCommand {
     PowerOff,
     Reboot,
     Suspend,
+    MediaPlayPause,
+    MediaStop,
+    MediaNext,
+    MediaPrev,
 }
 
 pub struct SystemManager {
     status: Arc<Mutex<SystemStatus>>,
-    cmd_tx: mpsc::UnboundedSender<SystemCommand>,
+    cmd_tx: mpsc::UnboundedSender<BackendCommand>,
 }
 
 impl SystemManager {
-    pub fn new() -> Self {
+    pub fn new(config: &crate::config::Config) -> Self {
+        let poll_interval = tokio::time::Duration::from_secs(config.system_poll_interval);
+        let reconnect_delay = tokio::time::Duration::from_secs(config.dbus_reconnect_delay);
+        let command_timeout = tokio::time::Duration::from_secs(config.command_timeout);
+
         let status = Arc::new(Mutex::new(SystemStatus::default()));
         let s_clone = status.clone();
-        let (cmd_tx, mut cmd_rx) = mpsc::unbounded_channel::<SystemCommand>();
+        let (cmd_tx, mut cmd_rx) = mpsc::unbounded_channel::<BackendCommand>();
 
         std::thread::spawn(move || {
             let rt = match tokio::runtime::Runtime::new() {
@@ -49,7 +57,7 @@ impl SystemManager {
 
             rt.block_on(async {
                 let mut conn: Option<Connection> = None;
-                let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(2));
+                let mut interval = tokio::time::interval(poll_interval);
                 let mut last_art_url: Option<String> = None;
                 let mut last_art_data: Option<Arc<Vec<u8>>> = None;
 
@@ -59,7 +67,9 @@ impl SystemManager {
                             Ok(c) => conn = Some(c),
                             Err(e) => {
                                 error!("Failed to connect to system DBus: {}", e);
-                                tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
+                                tokio::time::sleep(reconnect_delay).await;
+                                interval = tokio::time::interval(poll_interval);
+                                continue;
                             }
                         }
                     }
@@ -244,26 +254,60 @@ impl SystemManager {
                                 }
                             }
                         }
-                        Some(command) = cmd_rx.recv() => {
-                            if let Some(ref c) = conn {
-                                let method = match command {
-                                    SystemCommand::PowerOff => "PowerOff",
-                                    SystemCommand::Reboot => "Reboot",
-                                    SystemCommand::Suspend => "Suspend",
-                                };
-                                debug!("Executing system command: {}", method);
-                                let result = tokio::time::timeout(
-                                    tokio::time::Duration::from_secs(5),
-                                    c.call_method(
-                                        Some("org.freedesktop.login1"),
-                                        "/org/freedesktop/login1",
-                                        Some("org.freedesktop.login1.Manager"),
-                                        method,
-                                        &(true),
-                                    )
-                                ).await;
-                                if result.is_err() {
-                                    error!("System command {} timed out", method);
+                        Some(cmd) = cmd_rx.recv() => {
+                            match cmd {
+                                BackendCommand::PowerOff
+                                | BackendCommand::Reboot
+                                | BackendCommand::Suspend => {
+                                    if let Some(ref c) = conn {
+                                        // Safety: only PowerOff/Reboot/Suspend reach this
+                                        // branch due to the outer match arm.
+                                        let method = match cmd {
+                                            BackendCommand::PowerOff => "PowerOff",
+                                            BackendCommand::Reboot => "Reboot",
+                                            BackendCommand::Suspend => "Suspend",
+                                            BackendCommand::MediaPlayPause
+                                            | BackendCommand::MediaStop
+                                            | BackendCommand::MediaNext
+                                            | BackendCommand::MediaPrev => {
+                                                unreachable!("media command in power branch: {:?}", cmd)
+                                            }
+                                        };
+                                        debug!("Executing system command: {}", method);
+                                        let result = tokio::time::timeout(
+                                            command_timeout,
+                                            c.call_method(
+                                                Some("org.freedesktop.login1"),
+                                                "/org/freedesktop/login1",
+                                                Some("org.freedesktop.login1.Manager"),
+                                                method,
+                                                &(true),
+                                            )
+                                        ).await;
+                                        if result.is_err() {
+                                            error!("System command {} timed out", method);
+                                        }
+                                    }
+                                }
+                                BackendCommand::MediaPlayPause
+                                | BackendCommand::MediaStop
+                                | BackendCommand::MediaNext
+                                | BackendCommand::MediaPrev => {
+                                    let action = cmd;
+                                    // Fire-and-forget: don't block the polling loop on MPRIS.
+                                    tokio::task::spawn_blocking(move || {
+                                        if let Ok(finder) = PlayerFinder::new() {
+                                            if let Ok(player) = finder.find_active() {
+                                                match action {
+                                                    BackendCommand::MediaPlayPause => { let _ = player.play_pause(); }
+                                                    BackendCommand::MediaStop => { let _ = player.stop(); }
+                                                    BackendCommand::MediaNext => { let _ = player.next(); }
+                                                    BackendCommand::MediaPrev => { let _ = player.previous(); }
+                                                    _ => {}
+                                                }
+                                            }
+                                        }
+                                    });
                                 }
                             }
                         }
@@ -276,42 +320,29 @@ impl SystemManager {
     }
 
     pub fn get_status(&self) -> SystemStatus {
-        self.status.lock().unwrap().clone()
+        self.status
+            .lock()
+            .map(|s| s.clone())
+            .unwrap_or_default()
     }
 
-    pub fn send_command(&self, cmd: SystemCommand) {
+    pub fn send_command(&self, cmd: BackendCommand) {
         let _ = self.cmd_tx.send(cmd);
     }
 
     pub fn media_play_pause(&self) {
-        if let Ok(finder) = PlayerFinder::new() {
-            if let Ok(player) = finder.find_active() {
-                let _ = player.play_pause();
-            }
-        }
+        let _ = self.cmd_tx.send(BackendCommand::MediaPlayPause);
     }
 
     pub fn media_stop(&self) {
-        if let Ok(finder) = PlayerFinder::new() {
-            if let Ok(player) = finder.find_active() {
-                let _ = player.stop();
-            }
-        }
+        let _ = self.cmd_tx.send(BackendCommand::MediaStop);
     }
 
     pub fn media_next(&self) {
-        if let Ok(finder) = PlayerFinder::new() {
-            if let Ok(player) = finder.find_active() {
-                let _ = player.next();
-            }
-        }
+        let _ = self.cmd_tx.send(BackendCommand::MediaNext);
     }
 
     pub fn media_prev(&self) {
-        if let Ok(finder) = PlayerFinder::new() {
-            if let Ok(player) = finder.find_active() {
-                let _ = player.previous();
-            }
-        }
+        let _ = self.cmd_tx.send(BackendCommand::MediaPrev);
     }
 }

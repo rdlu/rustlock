@@ -3,7 +3,7 @@ use cairo::{Format, ImageSurface};
 
 impl Renderer {
     pub(crate) fn load_icons(&mut self) {
-        log::info!("Attempting to load status icons...");
+        log::debug!("Attempting to load status icons...");
         let wifi_names = [
             "network-wireless-signal-excellent-symbolic",
             "network-wireless-signal-excellent",
@@ -25,7 +25,7 @@ impl Renderer {
             .unwrap_or_default();
 
         if !wifi_path.is_empty() {
-            log::info!("Resolved WiFi icon path: {}", wifi_path);
+            log::debug!("Resolved WiFi icon path: {}", wifi_path);
             self.wifi_icon_surface = self.load_icon(&wifi_path);
         }
 
@@ -50,7 +50,7 @@ impl Renderer {
             .unwrap_or_default();
 
         if !bt_path.is_empty() {
-            log::info!("Resolved Bluetooth icon path: {}", bt_path);
+            log::debug!("Resolved Bluetooth icon path: {}", bt_path);
             self.bluetooth_icon_surface = self.load_icon(&bt_path);
         }
 
@@ -77,7 +77,7 @@ impl Renderer {
             .unwrap_or_default();
 
         if !batt_path.is_empty() {
-            log::info!("Resolved Battery icon path: {}", batt_path);
+            log::debug!("Resolved Battery icon path: {}", batt_path);
             self.battery_icon_surface = self.load_icon(&batt_path);
         }
 
@@ -353,27 +353,27 @@ impl Renderer {
         self.context.new_path();
         self.context.set_source_rgba(1.0, 1.0, 1.0, self.fade_alpha);
         self.context.set_font_size(48.0);
-        let te = self.context.text_extents(&time_str).unwrap();
+        let te = render_try!(self.context.text_extents(&time_str));
         self.context
             .move_to(center_x - te.width() / 2.0, center_y + te.height() / 4.0);
-        self.context.show_text(&time_str).unwrap();
+        render_try!(self.context.show_text(&time_str));
 
         self.context.new_path();
         self.context.set_font_size(14.0);
-        let de = self.context.text_extents(&date_str).unwrap();
+        let de = render_try!(self.context.text_extents(&date_str));
         self.context.move_to(
             center_x - de.width() / 2.0,
             center_y + te.height() / 4.0 + 25.0,
         );
-        self.context.show_text(&date_str).unwrap();
+        render_try!(self.context.show_text(&date_str));
 
         self.context.new_path();
-        let ue = self.context.text_extents(&self.uptime_cache).unwrap();
+        let ue = render_try!(self.context.text_extents(&self.uptime_cache));
         self.context.move_to(
             center_x - ue.width() / 2.0,
             center_y + te.height() / 4.0 + 43.0,
         );
-        self.context.show_text(&self.uptime_cache).unwrap();
+        render_try!(self.context.show_text(&self.uptime_cache));
     }
 
     pub(crate) fn draw_network(&self) {
@@ -392,13 +392,13 @@ impl Renderer {
                 self.context.set_source_rgba(1.0, 1.0, 1.0, self.fade_alpha);
                 self.context.set_font_size(16.0);
                 self.context.move_to(text_x, y);
-                self.context.show_text(ssid).unwrap();
+                render_try!(self.context.show_text(ssid));
             } else {
                 self.context.new_path();
                 self.context.set_source_rgba(1.0, 1.0, 1.0, self.fade_alpha);
                 self.context.set_font_size(16.0);
                 self.context.move_to(x, y);
-                self.context.show_text(ssid).unwrap();
+                render_try!(self.context.show_text(ssid));
             }
         }
     }
@@ -418,7 +418,7 @@ impl Renderer {
                 self.context.set_source_rgba(1.0, 1.0, 1.0, self.fade_alpha);
                 self.context.set_font_size(16.0);
                 self.context.move_to(text_x, y);
-                self.context.show_text(&battery_text).unwrap();
+                render_try!(self.context.show_text(&battery_text));
             } else {
                 self.draw_battery_icon_at(
                     x,
@@ -433,7 +433,7 @@ impl Renderer {
                 self.context.set_source_rgba(1.0, 1.0, 1.0, self.fade_alpha);
                 self.context.set_font_size(16.0);
                 self.context.move_to(x + icon_width + 10.0, y);
-                self.context.show_text(&battery_text).unwrap();
+                render_try!(self.context.show_text(&battery_text));
             }
         }
     }
@@ -462,7 +462,7 @@ impl Renderer {
                 .set_source_rgba(1.0, 1.0, 1.0, self.fade_alpha * alpha_mult);
             self.context.set_font_size(14.0);
             self.context.move_to(text_x, y);
-            self.context.show_text(&status_text).unwrap();
+            render_try!(self.context.show_text(&status_text));
         }
     }
 
@@ -478,7 +478,7 @@ impl Renderer {
                 self.context.set_font_size(16.0);
                 let text = format!("Layout: {}", layout);
                 self.context.move_to(x, y);
-                self.context.show_text(&text).unwrap();
+                render_try!(self.context.show_text(&text));
             }
         }
     }
@@ -490,8 +490,12 @@ impl Renderer {
             (target_size / surface.width() as f64).min(target_size / surface.height() as f64);
         self.context.translate(x, y);
         self.context.scale(scale, scale);
-        self.context.set_source_surface(surface, 0.0, 0.0).unwrap();
-        self.context.paint_with_alpha(self.fade_alpha).unwrap();
+        if let Err(e) = self.context.set_source_surface(surface, 0.0, 0.0) {
+            log::error!("cairo error: {:?}", e);
+        }
+        if let Err(e) = self.context.paint_with_alpha(self.fade_alpha) {
+            log::error!("cairo error: {:?}", e);
+        }
         self.context.restore().unwrap();
     }
 
@@ -508,10 +512,12 @@ impl Renderer {
             (target_size / surface.width() as f64).min(target_size / surface.height() as f64);
         self.context.translate(x, y);
         self.context.scale(scale, scale);
-        self.context.set_source_surface(surface, 0.0, 0.0).unwrap();
-        self.context
-            .paint_with_alpha(self.fade_alpha * alpha)
-            .unwrap();
+        if let Err(e) = self.context.set_source_surface(surface, 0.0, 0.0) {
+            log::error!("cairo error: {:?}", e);
+        }
+        if let Err(e) = self.context.paint_with_alpha(self.fade_alpha * alpha) {
+            log::error!("cairo error: {:?}", e);
+        }
         self.context.restore().unwrap();
     }
 
@@ -529,11 +535,11 @@ impl Renderer {
         self.context.set_source_rgba(1.0, 1.0, 1.0, alpha * 0.5);
         self.context.set_line_width(2.0);
         self.context.rectangle(x, y, width, height);
-        self.context.stroke().unwrap();
+        render_try!(self.context.stroke());
         self.context.new_path();
         self.context
             .rectangle(x + width, y + height / 4.0, 3.0, height / 2.0);
-        self.context.fill().unwrap();
+        render_try!(self.context.fill());
         let fill_width = (width - 4.0) * (percent / 100.0);
         self.context.new_path();
         if percent < 20.0 {
@@ -543,7 +549,7 @@ impl Renderer {
         }
         self.context
             .rectangle(x + 2.0, y + 2.0, fill_width, height - 4.0);
-        self.context.fill().unwrap();
+        render_try!(self.context.fill());
         if charging {
             self.context.new_path();
             self.context.set_source_rgba(1.0, 1.0, 0.0, alpha);
@@ -556,7 +562,7 @@ impl Renderer {
             self.context.line_to(bx - 1.0, by - 3.0);
             self.context.line_to(bx + 1.0, by - 3.0);
             self.context.close_path();
-            self.context.fill().unwrap();
+            render_try!(self.context.fill());
         }
     }
 }

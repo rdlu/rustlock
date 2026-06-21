@@ -1,4 +1,8 @@
-# Feature Request
+---
+name: Feature Request
+about: Suggest an idea for rustlock
+labels: enhancement
+---
 
 **Is your feature request related to a problem? Please describe.**
 

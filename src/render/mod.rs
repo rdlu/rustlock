@@ -4,9 +4,24 @@ use std::time::Instant;
 use crate::config::Config;
 use crate::system::SystemStatus;
 
+/// Log cairo errors and return early instead of propagating panics.
+/// Defined once here and available to all render submodules.
+macro_rules! render_try {
+    ($expr:expr) => {
+        match $expr {
+            Ok(v) => v,
+            Err(e) => {
+                log::error!("cairo error: {:?}", e);
+                return;
+            }
+        }
+    };
+}
+
 mod feedback;
 mod indicator;
 mod media_bar;
+mod ring_shape;
 mod status_bar;
 
 pub struct Renderer {
@@ -19,9 +34,11 @@ pub struct Renderer {
     pub(crate) wrong_password_shown: bool,
     pub(crate) key_highlight_shown: bool,
     pub(crate) cleared_feedback_shown: bool,
+    pub(crate) verifying_shown: bool,
     pub(crate) wrong_password_start: Option<Instant>,
     pub(crate) key_highlight_start: Option<Instant>,
     pub(crate) cleared_feedback_start: Option<Instant>,
+    pub(crate) verifying_start: Option<Instant>,
     pub(crate) key_highlight_angle: f64,
     pub(crate) background: Option<ImageSurface>,
     pub(crate) password_display: String,
@@ -60,9 +77,11 @@ impl Renderer {
             wrong_password_shown: false,
             key_highlight_shown: false,
             cleared_feedback_shown: false,
+            verifying_shown: false,
             wrong_password_start: None,
             key_highlight_start: None,
             cleared_feedback_start: None,
+            verifying_start: None,
             key_highlight_angle: 0.0,
             background: None,
             password_display: String::new(),
@@ -108,6 +127,10 @@ impl Renderer {
 
     pub fn set_password_display(&mut self, length: usize) {
         self.password_display = ".".repeat(length);
+    }
+
+    pub fn peek_password(&mut self, password: &str) {
+        self.password_display = password.to_string();
     }
 
     pub fn set_cursor_position(&mut self, position: usize) {
@@ -191,6 +214,10 @@ impl Renderer {
 
         if self.caps_lock && self.config.show_caps_lock_text {
             self.draw_caps_lock_indicator();
+        }
+
+        if self.verifying_shown {
+            self.draw_verifying_feedback();
         }
 
         if self.wrong_password_shown {

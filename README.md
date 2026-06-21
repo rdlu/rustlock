@@ -42,8 +42,8 @@ A high-performance Wayland screen locker written in Rust, inspired by `swaylock-
   - PAM-based authentication
   - Configurable grace period (any key press within N seconds unlocks without password)
 - 🎯 **Customization**:
+  - Multiple ring shapes: circle, square, diamond, hexagon, pill
   - Custom icons for WiFi, Bluetooth, Battery
-  - Theme presets (modern, pixel, glass)
   - Configuration via config file or CLI
 
 ---
@@ -65,6 +65,7 @@ rustlock \
     --indicator \
     --indicator-radius 100 \
     --indicator-thickness 7 \
+    --ring-shape hexagon \
     --effect-blur 7x5 \
     --effect-vignette 0.5:0.5 \
     --ring-color 785412 \
@@ -72,6 +73,8 @@ rustlock \
     --line-color 00000000 \
     --inside-color 00000088 \
     --separator-color 00000000 \
+    --show-network \
+    --show-battery \
     --grace 2 \
     --fade-in 0.2
 ```
@@ -96,51 +99,77 @@ Use arrow keys to move the cursor while entering your password:
 
 ## ⚙️ Configuration
 
-Options can be provided via command line or a configuration file at `~/.config/rustlock/config.toml`. CLI arguments take precedence over config file, which takes precedence over theme defaults.
+Options can be provided via command line or a configuration file at `~/.config/rustlock/config.toml`. CLI arguments take precedence over config file values.
 
 ### Options
 
-| Option | Description |
-|--------|-------------|
-| **General** | |
-| `--screenshots` | Capture desktop background before locking |
-| `--image <PATH>` | Use custom background image instead of screenshot |
-| `--clock` | Display centered clock and date |
-| `--indicator` | Show password entry ring (default: true) |
-| `--indicator-radius <N>` | Ring radius in pixels (default: 100) |
-| `--indicator-thickness <N>` | Ring thickness in pixels (default: 7) |
-| **Effects** | |
-| `--effect-blur <R>x<P>` | Gaussian blur: radius x passes (e.g., `7x5`) |
-| `--effect-pixelate` | Pixelate effect |
-| `--effect-swirl` | Swirl distortion effect |
-| `--effect-melting` | Melting distortion effect |
-| `--effect-vignette <B>:<F>` | Vignette: base:factor (e.g., `0.5:0.5`) |
-| **Colors** | |
-| `--ring-color <RRGGBB[AA]>` | Outer ring color (hex, optional alpha) |
-| `--key-hl-color <RRGGBB[AA]>` | Key highlight segment color |
-| `--line-color <RRGGBB[AA]>` | Separator line color |
-| `--inside-color <RRGGBB[AA]>` | Inner circle color |
-| `--separator-color <RRGGBB[AA]>` | Ring separator color |
-| **Display Options** | |
-| `--show-media` | Show MPRIS media info (default: true) |
-| `--show-battery` | Show battery status (default: true) |
-| `--show-network` | Show WiFi status (default: true) |
-| `--show-bluetooth` | Show Bluetooth status (default: true) |
-| `--show-keyboard-layout` | Show keyboard layout indicator (default: true) |
-| `--show-album-art` | Show album art (default: true) |
-| `--hide-password` | Hide password dots (default: false, dots are shown) |
-| **Custom Icons** | |
-| `--wifi-icon <PATH>` | Custom WiFi icon (PNG/SVG) |
-| `--bluetooth-icon <PATH>` | Custom Bluetooth icon (PNG/SVG) |
-| `--battery-icon <PATH>` | Custom battery icon (PNG/SVG) |
-| **Other** | |
-| `--grace <SECONDS>` | Grace period in seconds (default: 2) |
-| `--fade-in <SECONDS>` | Fade-in animation duration (default: 0.2) |
-| `--pam-service <NAME>` | PAM service name (default: "rustlock") |
-| `--config <PATH>` | Path to config file |
-| `--theme <NAME>` | Theme preset: modern, pixel, glass |
-| `--debug` | Enable debug logging |
-| `--log-file` | Write logs to `~/.rustlock.log` |
+| Option | Default | Description |
+|--------|---------|-------------|
+| **General** | | |
+| `--screenshots` | — | Capture desktop background before locking |
+| `--image <PATH>` | — | Use custom background image instead of screenshot |
+| `--clock` | — | Display centered clock and date |
+| `--indicator` | `true` | Show password entry ring |
+| `--hide-password` | `false` | Hide password dots (dots are shown by default) |
+| `--config <PATH>` | — | Path to config file |
+| `--debug` | — | Enable debug logging |
+| **Ring** | | |
+| `--indicator-radius <N>` | `100` | Ring radius in pixels |
+| `--indicator-thickness <N>` | `7` | Ring thickness in pixels |
+| `--ring-shape <SHAPE>` | `circle` | Ring shape: `circle`, `square`, `diamond`, `hexagon`, `pill` |
+| `--max-dots <N>` | `24` | Maximum password dots in the ring |
+| **Effects** | | |
+| `--effect-blur <R>x<P>` | — | Gaussian blur: radius x passes (e.g., `7x5`) |
+| `--effect-vignette <B>:<F>` | — | Vignette: base : factor (e.g., `0.5:0.5`) |
+| `--effect-pixelate <S>` | — | Pixelate effect with block size in pixels |
+| `--effect-swirl <A>` | — | Swirl distortion with angle |
+| `--effect-melting <F>` | — | Melting distortion with factor |
+| **Colors** (hex `RRGGBB[AA]`) | | |
+| `--ring-color <HEX>` | `#785412` | Outer ring color |
+| `--line-color <HEX>` | `#00000000` | Separator line color |
+| `--inside-color <HEX>` | `#00000088` | Inner circle fill color |
+| `--separator-color <HEX>` | `#00000000` | Ring segment separator color |
+| `--key-hl-color <HEX>` | `#4EAC41` | Key highlight segment color |
+| `--caps-lock-key-hl-color <HEX>` | `#4EAC41` | Key highlight color when caps lock is on |
+| `--caps-lock-bs-hl-color <HEX>` | `#DB3300` | Backspace highlight color in caps lock |
+| `--caps-lock-color <HEX>` | `#E5A445` | Caps lock indicator ring color |
+| `--caps-lock-text-color <HEX>` | `#E5A445` | Caps lock text color |
+| `--verifying-color <HEX>` | `#0072FF` | Verifying feedback ring color |
+| `--show-caps-lock-text` | `true` | Show "CAPS" text when caps lock is active |
+| **Display** | | |
+| `--show-media` | `true` | Show MPRIS media player information |
+| `--show-battery` | `true` | Show battery status |
+| `--show-network` | `true` | Show WiFi SSID and signal strength |
+| `--show-bluetooth` | `true` | Show Bluetooth status |
+| `--show-album-art` | `true` | Show album art for media |
+| `--show-keyboard-layout` | `true` | Show keyboard layout indicator |
+| **Feedback & Timing** | | |
+| `--fade-in <SECONDS>` | `0.2` | Fade-in animation duration |
+| `--grace <SECONDS>` | `0` | Grace period — any key press unlocks within N seconds |
+| `--auth-timeout <MS>` | `10000` | PAM authentication timeout in milliseconds |
+| `--wrong-password-duration <MS>` | `500` | Wrong password feedback animation duration |
+| `--key-highlight-duration <MS>` | `300` | Key highlight feedback duration |
+| `--cleared-feedback-duration <MS>` | `500` | Cleared password feedback duration |
+| `--verifying-timeout <MS>` | `5000` | Verifying feedback fallback timeout |
+| `--feedback-window-duration <MS>` | `1000` | Wrong password feedback input window |
+| `--key-highlight-window-duration <MS>` | `200` | Key highlight input-side window |
+| **System** | | |
+| `--pam-service <NAME>` | `rustlock` | PAM service name |
+| `--system-poll-interval <S>` | `2` | Polling interval for system status updates |
+| `--dbus-reconnect-delay <S>` | `5` | Delay before reconnecting DBus on failure |
+| `--command-timeout <S>` | `5` | Timeout for system commands |
+| **Custom Icons** (PNG/SVG path) | | |
+| `--wifi-icon <PATH>` | — | Custom WiFi icon |
+| `--bluetooth-icon <PATH>` | — | Custom Bluetooth icon |
+| `--battery-icon <PATH>` | — | Custom battery icon |
+| `--media-prev-icon <PATH>` | — | Custom previous track icon |
+| `--media-stop-icon <PATH>` | — | Custom stop icon |
+| `--media-play-icon <PATH>` | — | Custom play icon |
+| `--media-pause-icon <PATH>` | — | Custom pause icon |
+| `--media-next-icon <PATH>` | — | Custom next track icon |
+| **Logging** | | |
+| `--log-file` | — | Write verbose logs to `~/.rustlock.log` |
+| `--log-path <PATH>` | — | Path for log file (enables file logging, overrides `--log-file` default path) |
 
 ---
 

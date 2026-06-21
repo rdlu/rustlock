@@ -29,22 +29,13 @@ jobs:
       - name: Install security tools
         uses: taiki-e/install-action@v2
         with:
-          tool: cargo-audit,cargo-deny,cargo-cyclonedx,cargo-outdated
+          tool: cargo-audit,cargo-deny,cargo-outdated
 
       - name: Run cargo audit
         run: cargo audit
 
       - name: Run cargo deny
         run: cargo deny check
-
-      - name: Generate Software Bill of Materials (SBOM)
-        run: cargo cyclonedx --format json --override-filename bom
-
-      - name: Upload SBOM
-        uses: actions/upload-artifact@v7
-        with:
-          name: sbom
-          path: bom.json
 
       - name: Check for outdated dependencies
         run: cargo outdated --exit-code 1 || echo "Some dependencies are outdated"

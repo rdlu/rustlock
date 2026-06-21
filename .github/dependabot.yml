@@ -1,5 +1,3 @@
-# Dependabot configuration for RustLock
-
 version: 2
 
 updates:
@@ -19,6 +17,13 @@ updates:
     reviewers:
       - "JorySeverijnse"
     versioning-strategy: "increase"
+    groups:
+      rust-dependencies:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"
 
   - package-ecosystem: "github-actions"
     directory: "/"
@@ -30,3 +35,10 @@ updates:
     labels:
       - "dependencies"
       - "github-actions"
+    groups:
+      actions-dependencies:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"

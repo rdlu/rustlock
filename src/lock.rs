@@ -30,6 +30,7 @@ pub struct LockedSurface {
     dirty: bool,
     /// Last clock minute (unix-minute) we rendered, to detect %H:%M rollover.
     last_minute: i64,
+    ctrl_held: bool,
 }
 
 impl LockedSurface {
@@ -62,6 +63,7 @@ impl LockedSurface {
             configured: false,
             dirty: true,
             last_minute: i64::MIN,
+            ctrl_held: false,
         })
     }
 
@@ -86,8 +88,6 @@ impl LockedSurface {
     /// surface (no input, no animation, same clock minute) returns `false` and
     /// does no cairo work, which keeps a locked session near-zero CPU.
     pub fn update(&mut self) -> bool {
-        self.input_handler.update();
-
         if !self.configured {
             return false;
         }
@@ -96,30 +96,37 @@ impl LockedSurface {
         if self.fade_alpha < 1.0 {
             let elapsed = self.start_time.elapsed();
             let fade_duration = std::time::Duration::from_secs_f32(self.config.fade_in);
-            // Ease-in-out cubic function
-            let t = (elapsed.as_secs_f64() / fade_duration.as_secs_f64()).clamp(0.0, 1.0);
-            let eased_t = if t < 0.5 {
-                4.0 * t * t * t
+
+            if fade_duration.is_zero() {
+                self.fade_alpha = 1.0;
+                self.renderer.set_fade_alpha(1.0);
+                self.dirty = true;
             } else {
-                1.0 - (-2.0 * t + 2.0).powi(3) / 2.0
-            };
-            let new_alpha = eased_t.min(1.0);
-            if t >= 1.0 {
-                // The eased curve only approaches 1.0 asymptotically, and the
-                // 0.001 throttle below suppresses the tiny final steps — which
-                // would leave fade_alpha stuck just under 1.0 forever. Since
-                // `fade_alpha < 1.0` is our "still animating" signal, that would
-                // force a full render every frame. Snap to exactly 1.0 once the
-                // fade duration has elapsed so the animation cleanly completes.
-                if self.fade_alpha != 1.0 {
-                    self.fade_alpha = 1.0;
-                    self.renderer.set_fade_alpha(1.0);
+                // Ease-in-out cubic function
+                let t = (elapsed.as_secs_f64() / fade_duration.as_secs_f64()).clamp(0.0, 1.0);
+                let eased_t = if t < 0.5 {
+                    4.0 * t * t * t
+                } else {
+                    1.0 - (-2.0 * t + 2.0).powi(3) / 2.0
+                };
+                let new_alpha = eased_t.min(1.0);
+                if t >= 1.0 {
+                    // The eased curve only approaches 1.0 asymptotically, and the
+                    // 0.001 throttle below suppresses the tiny final steps — which
+                    // would leave fade_alpha stuck just under 1.0 forever. Since
+                    // `fade_alpha < 1.0` is our "still animating" signal, that would
+                    // force a full render every frame. Snap to exactly 1.0 once the
+                    // fade duration has elapsed so the animation cleanly completes.
+                    if self.fade_alpha != 1.0 {
+                        self.fade_alpha = 1.0;
+                        self.renderer.set_fade_alpha(1.0);
+                        self.dirty = true;
+                    }
+                } else if (new_alpha - self.fade_alpha).abs() > 0.001 {
+                    self.fade_alpha = new_alpha;
+                    self.renderer.set_fade_alpha(self.fade_alpha);
                     self.dirty = true;
                 }
-            } else if (new_alpha - self.fade_alpha).abs() > 0.001 {
-                self.fade_alpha = new_alpha;
-                self.renderer.set_fade_alpha(self.fade_alpha);
-                self.dirty = true;
             }
         }
 
@@ -150,7 +157,7 @@ impl LockedSurface {
         // Set background if available and not already applied
         if !self.background_applied {
             if let Some(ref background) = self.background {
-                log::info!("Applying background image to renderer");
+                log::debug!("Applying background image to renderer");
                 self.renderer.set_background(background.clone());
                 self.background_applied = true;
                 self.dirty = true;
@@ -174,8 +181,15 @@ impl LockedSurface {
             return false;
         }
 
-        self.renderer
-            .set_password_display(self.input_handler.password_length());
+        if !self.config.hide_password {
+            let length = self.input_handler.password_length();
+            if self.ctrl_held {
+                self.renderer
+                    .peek_password(self.input_handler.password_buffer().as_str());
+            } else {
+                self.renderer.set_password_display(length);
+            }
+        }
         self.renderer
             .set_cursor_position(self.input_handler.cursor_position());
         self.renderer.render();
@@ -217,14 +231,24 @@ impl LockedSurface {
     }
 
     pub fn show_wrong_password(&mut self) {
+        self.renderer.clear_verifying();
         self.input_handler.set_wrong_password_feedback();
+        self.wrong_password_shown = false;
+        self.dirty = true;
+    }
+
+    pub fn show_verifying(&mut self) {
+        self.renderer.show_verifying();
+        self.dirty = true;
     }
 
     pub fn handle_key_event(
         &mut self,
-        event: smithay_client_toolkit::seat::keyboard::KeyEvent,
+        event: KeyEvent,
         modifiers: smithay_client_toolkit::seat::keyboard::Modifiers,
     ) -> Option<InputAction> {
+        self.ctrl_held = modifiers.ctrl;
+
         let action = self
             .input_handler
             .handle_key_event(event.keysym, event.utf8, modifiers);
@@ -268,6 +292,13 @@ impl LockedSurface {
     pub fn set_system_status(&mut self, status: SystemStatus) {
         if self.renderer.system_status != status {
             self.renderer.system_status = status;
+            self.dirty = true;
+        }
+    }
+
+    pub fn set_ctrl_held(&mut self, held: bool) {
+        if self.ctrl_held != held {
+            self.ctrl_held = held;
             self.dirty = true;
         }
     }
@@ -321,10 +352,22 @@ impl LockManager {
         let mut action = None;
         for surface in &mut self.surfaces {
             if let Some(a) = surface.handle_key_event(event.clone(), modifiers) {
-                action = Some(a);
+                if let crate::input::InputAction::SubmitPassword(p) = &a {
+                    if !p.is_empty() {
+                        return Some(a);
+                    }
+                } else {
+                    action = Some(a);
+                }
             }
         }
         action
+    }
+
+    pub fn set_ctrl_held(&mut self, held: bool) {
+        for surface in &mut self.surfaces {
+            surface.set_ctrl_held(held);
+        }
     }
 
     pub fn remove_surface_by_output(&mut self, output: &wl_output::WlOutput) -> Option<usize> {

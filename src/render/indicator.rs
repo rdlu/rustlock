@@ -1,3 +1,4 @@
+use crate::render::ring_shape;
 use crate::render::Renderer;
 
 impl Renderer {
@@ -6,35 +7,40 @@ impl Renderer {
         let center_y = self.height as f64 / 2.0;
         let radius = self.config.indicator_radius as f64;
         let thickness = self.config.indicator_thickness as f64;
+        let shape = self.config.ring_shape;
 
+        // Filled center
         self.context.new_path();
         let (r, g, b, a) = self.config.inside_color;
         self.context.set_source_rgba(r, g, b, a * self.fade_alpha);
-        self.context.arc(
+        ring_shape::build_fill_path(
+            &self.context,
             center_x,
             center_y,
             radius - thickness / 2.0,
-            0.0,
-            2.0 * std::f64::consts::PI,
+            thickness,
+            shape,
         );
-        self.context.fill().unwrap();
+        render_try!(self.context.fill());
 
+        // Separator line behind the ring
         let (lr, lg, lb, la) = self.config.line_color;
         if la > 0.0 {
             self.context.new_path();
             self.context
                 .set_source_rgba(lr, lg, lb, la * self.fade_alpha);
             self.context.set_line_width(1.0);
-            self.context.arc(
+            ring_shape::build_ring_path(
+                &self.context,
                 center_x,
                 center_y,
                 radius - thickness / 2.0,
-                0.0,
-                2.0 * std::f64::consts::PI,
+                shape,
             );
-            self.context.stroke().unwrap();
+            render_try!(self.context.stroke());
         }
 
+        // Outer ring
         let (r, g, b, a) = if self.caps_lock {
             self.config.caps_lock_color
         } else {
@@ -43,10 +49,11 @@ impl Renderer {
         self.context.new_path();
         self.context.set_source_rgba(r, g, b, a * self.fade_alpha);
         self.context.set_line_width(thickness);
-        self.context
-            .arc(center_x, center_y, radius, 0.0, 2.0 * std::f64::consts::PI);
-        self.context.stroke().unwrap();
+        self.context.set_line_join(cairo::LineJoin::Round);
+        ring_shape::build_ring_path(&self.context, center_x, center_y, radius, shape);
+        render_try!(self.context.stroke());
 
+        // Separator line through center
         let (r, g, b, a) = self.config.separator_color;
         if a > 0.0 {
             self.context.new_path();
@@ -54,7 +61,7 @@ impl Renderer {
             self.context.set_line_width(1.0);
             self.context.move_to(center_x - radius, center_y);
             self.context.line_to(center_x + radius, center_y);
-            self.context.stroke().unwrap();
+            render_try!(self.context.stroke());
         }
     }
 
@@ -66,6 +73,7 @@ impl Renderer {
         let center_y = self.height as f64 / 2.0;
         let radius = self.config.indicator_radius as f64;
         let thickness = self.config.indicator_thickness as f64;
+        let shape = self.config.ring_shape;
 
         self.context.new_path();
         self.context.set_source_rgba(1.0, 1.0, 1.0, self.fade_alpha);
@@ -75,33 +83,41 @@ impl Renderer {
             return;
         }
 
+        let max_dots = self.config.max_dots as f64;
         let dot_radius = radius - thickness - 10.0;
-        let angle_step = (360.0 / 24.0_f64).to_radians();
+        let t_offset = ring_shape::top_centre_offset(shape);
 
         for i in 0..count {
-            let angle = (i as f64 * angle_step) - std::f64::consts::FRAC_PI_2;
-            let x = center_x + dot_radius * angle.cos();
-            let y = center_y + dot_radius * angle.sin();
+            let t = (i as f64 / max_dots) + t_offset;
+            let (x, y) = ring_shape::perimeter_point(center_x, center_y, dot_radius, shape, t);
 
             self.context.new_path();
             self.context.arc(x, y, 4.0, 0.0, 2.0 * std::f64::consts::PI);
-            self.context.fill().unwrap();
+            render_try!(self.context.fill());
         }
 
+        // Cursor indicator
         if self.fade_alpha > 0.0 && self.cursor_position > 0 {
-            let cursor_angle =
-                ((self.cursor_position as f64 - 0.5) * angle_step) - std::f64::consts::FRAC_PI_2;
-            let x1 = center_x + (dot_radius - 8.0) * cursor_angle.cos();
-            let y1 = center_y + (dot_radius - 8.0) * cursor_angle.sin();
-            let x2 = center_x + (dot_radius + 8.0) * cursor_angle.cos();
-            let y2 = center_y + (dot_radius + 8.0) * cursor_angle.sin();
+            let cursor_t = ((self.cursor_position as f64 - 0.5) / max_dots) + t_offset;
+            let (cx, cy) =
+                ring_shape::perimeter_point(center_x, center_y, dot_radius, shape, cursor_t);
+            let dx = cx - center_x;
+            let dy = cy - center_y;
+            let len = (dx * dx + dy * dy).sqrt().max(1.0);
+            let nx = dx / len;
+            let ny = dy / len;
+
+            let x1 = cx - 8.0 * nx;
+            let y1 = cy - 8.0 * ny;
+            let x2 = cx + 8.0 * nx;
+            let y2 = cy + 8.0 * ny;
 
             self.context.new_path();
             self.context.set_source_rgba(0.0, 0.8, 1.0, self.fade_alpha);
             self.context.set_line_width(2.0);
             self.context.move_to(x1, y1);
             self.context.line_to(x2, y2);
-            self.context.stroke().unwrap();
+            render_try!(self.context.stroke());
         }
     }
 
@@ -114,9 +130,9 @@ impl Renderer {
         self.context.set_source_rgba(r, g, b, a * self.fade_alpha);
         self.context.set_font_size(24.0);
         let text = "Caps Lock";
-        let te = self.context.text_extents(text).unwrap();
+        let te = render_try!(self.context.text_extents(text));
         self.context
             .move_to(center_x - te.width() / 2.0, center_y - radius - 10.0);
-        self.context.show_text(text).unwrap();
+        render_try!(self.context.show_text(text));
     }
 }

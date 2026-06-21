@@ -4,7 +4,7 @@
 
 use anyhow::{Context, Result};
 use cairo::ImageSurface;
-use log::debug;
+use log::warn;
 use smithay_client_toolkit::shm::{slot::Buffer, slot::SlotPool};
 use std::sync::Mutex;
 use wayland_client::globals::GlobalList;
@@ -39,22 +39,22 @@ impl Screenshot {
             self.apply_blur(radius, times)?;
         }
         if let Some((base, factor)) = config.effect_vignette {
-            self.apply_vignette(base, factor);
+            self.apply_vignette(base, factor)?;
         }
         if let Some(pixel_size) = config.effect_pixelate {
-            self.apply_pixelate(pixel_size);
+            self.apply_pixelate(pixel_size)?;
         }
         if let Some(angle) = config.effect_swirl {
-            self.apply_swirl(angle);
+            self.apply_swirl(angle)?;
         }
         if let Some(factor) = config.effect_melting {
-            self.apply_melting(factor);
+            self.apply_melting(factor)?;
         }
         Ok(())
     }
 
     /// Apply a swirl effect.
-    pub fn apply_swirl(&mut self, angle: f32) {
+    pub fn apply_swirl(&mut self, angle: f32) -> Result<()> {
         let width = self.surface.width();
         let height = self.surface.height();
         let center_x = width as f32 / 2.0;
@@ -65,7 +65,7 @@ impl Screenshot {
         let mut data = vec![0u8; stride * height as usize];
         self.surface
             .with_data(|src| data.copy_from_slice(src))
-            .unwrap();
+            .context("swirl: failed to read surface data")?;
         let original = data.clone();
 
         for y in 0..height {
@@ -92,12 +92,13 @@ impl Screenshot {
             }
         }
 
-        let mut surface_data = self.surface.data().unwrap();
+        let mut surface_data = self.surface.data().context("swirl: failed to write surface data")?;
         surface_data.copy_from_slice(&data);
+        Ok(())
     }
 
     /// Apply a melting effect (vertical smear).
-    pub fn apply_melting(&mut self, factor: f32) {
+    pub fn apply_melting(&mut self, factor: f32) -> Result<()> {
         let width = self.surface.width();
         let height = self.surface.height();
 
@@ -105,7 +106,7 @@ impl Screenshot {
         let mut data = vec![0u8; stride * height as usize];
         self.surface
             .with_data(|src| data.copy_from_slice(src))
-            .unwrap();
+            .context("melting: failed to read surface data")?;
 
         use rand::RngExt;
         let mut rng = rand::rng();
@@ -130,14 +131,15 @@ impl Screenshot {
             }
         }
 
-        let mut surface_data = self.surface.data().unwrap();
+        let mut surface_data = self.surface.data().context("melting: failed to write surface data")?;
         surface_data.copy_from_slice(&data);
+        Ok(())
     }
 
     /// Pixelate the surface.
-    pub fn apply_pixelate(&mut self, pixel_size: u32) {
+    pub fn apply_pixelate(&mut self, pixel_size: u32) -> Result<()> {
         if pixel_size <= 1 {
-            return;
+            return Ok(());
         }
 
         let width = self.surface.width();
@@ -146,7 +148,7 @@ impl Screenshot {
         let mut data = vec![0u8; stride * height as usize];
         self.surface
             .with_data(|src| data.copy_from_slice(src))
-            .unwrap();
+            .context("pixelate: failed to read surface data")?;
 
         for y in (0..height).step_by(pixel_size as usize) {
             for x in (0..width).step_by(pixel_size as usize) {
@@ -192,8 +194,9 @@ impl Screenshot {
             }
         }
 
-        let mut surface_data = self.surface.data().unwrap();
+        let mut surface_data = self.surface.data().context("pixelate: failed to write surface data")?;
         surface_data.copy_from_slice(&data);
+        Ok(())
     }
 
     /// Apply a Gaussian blur effect.
@@ -202,31 +205,42 @@ impl Screenshot {
             return Ok(());
         }
 
-        let width = self.surface.width();
-        let height = self.surface.height();
+        let width = self.surface.width() as usize;
+        let height = self.surface.height() as usize;
         let stride = self.surface.stride() as usize;
-        let mut data = vec![0u8; stride * height as usize];
+        let mut data = vec![0u8; stride * height];
 
         self.surface
             .with_data(|src| data.copy_from_slice(src))
-            .context("Failed to get surface data")?;
+            .context("blur: failed to read surface data")?;
 
-        // Convert to image::RgbaImage for processing
+        // Convert from stride-padded surface data to tight RgbaImage.
+        // Cairo stride may be larger than width*4 for alignment, so copy
+        // row by row to strip the padding.
+        let tight_stride = width * 4;
+        let mut tight = vec![0u8; tight_stride * height];
+        for y in 0..height {
+            let src_off = y * stride;
+            let dst_off = y * tight_stride;
+            tight[dst_off..dst_off + tight_stride]
+                .copy_from_slice(&data[src_off..src_off + tight_stride]);
+        }
+
         let mut img: image::ImageBuffer<image::Rgba<u8>, Vec<u8>> =
-            image::ImageBuffer::from_raw(width as u32, height as u32, data)
-                .context("Failed to create image buffer")?;
+            image::ImageBuffer::from_raw(width as u32, height as u32, tight)
+                .context("blur: failed to create image buffer")?;
 
         for _ in 0..times {
             let mut rgb_data: Vec<[u8; 3]> =
-                Vec::with_capacity((width as usize) * (height as usize));
+                Vec::with_capacity(width * height);
             for pixel in img.pixels() {
                 rgb_data.push([pixel[0], pixel[1], pixel[2]]);
             }
 
             fastblur::gaussian_blur(
                 &mut rgb_data,
-                width as usize,
-                height as usize,
+                width,
+                height,
                 radius as f32,
             );
 
@@ -237,15 +251,20 @@ impl Screenshot {
             }
         }
 
-        // Copy back to surface
+        // Copy back from tight buffer into stride-padded surface data
         let new_data = img.into_raw();
         let mut surface_data = self.surface.data()?;
-        surface_data.copy_from_slice(&new_data);
+        for y in 0..height {
+            let src_off = y * tight_stride;
+            let dst_off = y * stride;
+            surface_data[dst_off..dst_off + tight_stride]
+                .copy_from_slice(&new_data[src_off..src_off + tight_stride]);
+        }
         Ok(())
     }
 
     /// Apply a vignette effect (darken edges).
-    pub fn apply_vignette(&mut self, base: f32, factor: f32) {
+    pub fn apply_vignette(&mut self, base: f32, factor: f32) -> Result<()> {
         let width = self.surface.width();
         let height = self.surface.height();
         let center_x = width as f32 / 2.0;
@@ -256,7 +275,7 @@ impl Screenshot {
         let mut data = vec![0u8; stride * height as usize];
         self.surface
             .with_data(|src| data.copy_from_slice(src))
-            .unwrap();
+            .context("vignette: failed to read surface data")?;
 
         for y in 0..height {
             for x in 0..width {
@@ -265,7 +284,7 @@ impl Screenshot {
                 let distance = (dx * dx + dy * dy).sqrt();
                 let vignette_factor = base + (1.0 - base) * (distance / max_distance).powf(factor);
 
-                let index = ((y * width + x) * 4) as usize;
+                let index = (y as usize * stride) + (x as usize * 4);
                 for i in 0..3 {
                     let value = data[index + i] as f32 * vignette_factor;
                     data[index + i] = value.clamp(0.0, 255.0) as u8;
@@ -273,8 +292,9 @@ impl Screenshot {
             }
         }
 
-        let mut surface_data = self.surface.data().unwrap();
+        let mut surface_data = self.surface.data().context("vignette: failed to write surface data")?;
         surface_data.copy_from_slice(&data);
+        Ok(())
     }
 }
 
@@ -312,7 +332,7 @@ impl ScreenshotManager {
             .ok();
 
         if manager.is_none() {
-            debug!("zwlr_screencopy_manager_v1 not available");
+            warn!("zwlr_screencopy_manager_v1 not available — backgrounds will not be captured");
         }
 
         Ok(Self { manager })
@@ -361,11 +381,15 @@ impl ScreenshotManager {
 
         let raw_data = {
             let mut data = vec![0u8; (info.width * info.height * 4) as usize];
+            let canvas_end = canvas.len();
             for row in 0..height {
                 let src_offset = row * stride;
                 let dst_offset = row * pixel_width;
-                data[dst_offset..dst_offset + pixel_width]
-                    .copy_from_slice(&canvas[src_offset..src_offset + pixel_width]);
+                let copy_end = (src_offset + pixel_width).min(canvas_end);
+                if copy_end > src_offset {
+                    data[dst_offset..dst_offset + pixel_width]
+                        .copy_from_slice(&canvas[src_offset..copy_end]);
+                }
             }
             data
         };
