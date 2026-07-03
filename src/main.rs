@@ -152,6 +152,11 @@ struct WaylandLock {
     system_manager: Arc<SystemManager>,
     modifiers: Modifiers,
     current_layout: u32,
+    // Whether the PAM conversation produced a message for the in-flight auth
+    // attempt. If not, handle_auth_result shows a generic failure notice so a
+    // wrong password still gives on-screen feedback (pam_unix stays silent;
+    // only faillock speaks, on lockout).
+    auth_msg_received: bool,
 }
 
 impl WaylandLock {
@@ -178,10 +183,21 @@ impl WaylandLock {
                 self.exit = true;
             }
         } else {
-            log::error!("❌ Authentication failed - wrong password");
+            // Not necessarily a wrong password — a faillock lockout denies even a
+            // correct one. The precise PAM code/message is logged above in auth.
+            log::error!("❌ Authentication failed");
+            // pam_unix is silent on a wrong password (it just returns AUTH_ERR),
+            // so fall back to a generic on-screen notice. A real PAM/faillock
+            // message (e.g. the lockout notice) already ran show_pam_message and
+            // set the flag, so we don't overwrite it here.
+            let show_generic = !self.auth_msg_received;
+            let fail_text = self.config.fail_text.clone();
             if let Ok(mut lock_manager) = self.lock_manager.lock() {
                 for surface in &mut lock_manager.surfaces {
                     surface.show_wrong_password();
+                    if show_generic {
+                        surface.show_pam_message(fail_text.clone());
+                    }
                 }
             }
         }
@@ -267,6 +283,7 @@ impl WaylandLock {
                 self.auth_seq += 1;
                 self.auth_pending_at = Some(Instant::now());
                 self.auth_pending_seq = Some(self.auth_seq);
+                self.auth_msg_received = false;
                 // Show verifying feedback on ALL surfaces BEFORE sending to PAM.
                 if let Ok(mut lock_manager) = self.lock_manager.lock() {
                     for surface in &mut lock_manager.surfaces {
@@ -811,9 +828,8 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let system_manager = Arc::new(SystemManager::new(&config));
 
-    let (auth_tx_actual, auth_feedback_rx_actual) = match auth::create_and_run_auth_loop(
-        config.pam_service.clone(),
-    ) {
+    let (auth_tx_actual, auth_feedback_rx_actual, auth_msg_rx_actual) =
+        match auth::create_and_run_auth_loop(config.pam_service.clone()) {
         Some(channels) => channels,
         None => {
             log::error!("Failed to initialize authentication. This usually means PAM is not configured correctly.");
@@ -861,6 +877,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         system_manager: system_manager.clone(),
         modifiers: Modifiers::default(),
         current_layout: 0,
+        auth_msg_received: false,
     };
 
     event_queue.blocking_dispatch(&mut state)?;
@@ -943,6 +960,24 @@ fn main() -> Result<(), Box<dyn Error>> {
                 // Ignore stale auth results from previous requests (e.g. after timeout or retry).
                 if state.auth_pending_seq == Some(seq) {
                     state.handle_auth_result(success);
+                }
+            }
+        })?;
+
+    // PAM info/error text (e.g. the faillock lockout notice) → show it on every
+    // surface so a lockout is spelled out instead of failing silently.
+    event_loop
+        .handle()
+        .insert_source(auth_msg_rx_actual, |event, _, state| {
+            if let calloop::channel::Event::Msg(text) = event {
+                let text = text.trim().to_string();
+                if !text.is_empty() {
+                    state.auth_msg_received = true;
+                    if let Ok(mut lm) = state.lock_manager.lock() {
+                        for surface in &mut lm.surfaces {
+                            surface.show_pam_message(text.clone());
+                        }
+                    }
                 }
             }
         })?;

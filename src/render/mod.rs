@@ -39,6 +39,8 @@ pub struct Renderer {
     pub(crate) key_highlight_start: Option<Instant>,
     pub(crate) cleared_feedback_start: Option<Instant>,
     pub(crate) verifying_start: Option<Instant>,
+    pub(crate) pam_message: Option<String>,
+    pub(crate) pam_message_start: Option<Instant>,
     pub(crate) key_highlight_angle: f64,
     pub(crate) background: Option<ImageSurface>,
     pub(crate) password_display: String,
@@ -83,6 +85,8 @@ impl Renderer {
             key_highlight_start: None,
             cleared_feedback_start: None,
             verifying_start: None,
+            pam_message: None,
+            pam_message_start: None,
             key_highlight_angle: 0.0,
             background: None,
             password_display: String::new(),
@@ -234,6 +238,10 @@ impl Renderer {
 
         if self.cleared_feedback_shown {
             self.draw_cleared_feedback();
+        }
+
+        if self.pam_message.is_some() {
+            self.draw_pam_message();
         }
 
         self.update_feedback_timers();

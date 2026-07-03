@@ -147,6 +147,19 @@ pub struct Config {
     )]
     pub verifying_color: (f64, f64, f64, f64),
 
+    /// Color of the PAM message text (faillock lockout notice, etc.).
+    #[arg(long, default_value = "BF616A", value_parser = util::parse_hex_color)]
+    pub message_color: (f64, f64, f64, f64),
+
+    /// How long (ms) to keep a PAM message on screen.
+    #[arg(long, default_value = "10000")]
+    pub message_duration: u64,
+
+    /// Fallback text shown on a failed attempt when PAM itself emits no message
+    /// (pam_unix stays silent on a wrong password; faillock speaks on lockout).
+    #[arg(long, default_value = "Authentication failed")]
+    pub fail_text: String,
+
     #[arg(long, action = clap::ArgAction::SetTrue)]
     pub show_caps_lock_text: bool,
 

@@ -241,6 +241,11 @@ impl LockedSurface {
         self.dirty = true;
     }
 
+    pub fn show_pam_message(&mut self, msg: String) {
+        self.renderer.show_pam_message(msg);
+        self.dirty = true;
+    }
+
     pub fn show_verifying(&mut self) {
         self.renderer.show_verifying();
         self.dirty = true;

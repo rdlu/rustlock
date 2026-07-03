@@ -167,6 +167,46 @@ impl Renderer {
         }
     }
 
+    /// Draw the current PAM message (e.g. the faillock lockout notice) centered
+    /// below the indicator. Fades out over the last 500ms of its lifetime.
+    pub(crate) fn draw_pam_message(&self) {
+        let msg = match &self.pam_message {
+            Some(m) if !m.is_empty() => m,
+            _ => return,
+        };
+        let intensity = match self.pam_message_start {
+            Some(start) => {
+                let elapsed = start.elapsed();
+                let duration = std::time::Duration::from_millis(self.config.message_duration);
+                if elapsed >= duration {
+                    0.0
+                } else if duration - elapsed < std::time::Duration::from_millis(500) {
+                    (duration - elapsed).as_secs_f64() / 0.5
+                } else {
+                    1.0
+                }
+            }
+            None => 0.0,
+        };
+        if intensity <= 0.0 {
+            return;
+        }
+
+        let center_x = self.width as f64 / 2.0;
+        let center_y = self.height as f64 / 2.0;
+        let radius = self.config.indicator_radius as f64;
+        let (r, g, b, a) = self.config.message_color;
+
+        self.context.new_path();
+        self.context.set_font_size(20.0);
+        self.context
+            .set_source_rgba(r, g, b, a * intensity * self.fade_alpha);
+        let te = render_try!(self.context.text_extents(msg));
+        self.context
+            .move_to(center_x - te.width() / 2.0, center_y + radius + 40.0);
+        render_try!(self.context.show_text(msg));
+    }
+
     /// Whether any feedback animation is currently in flight and therefore
     /// requires continued per-frame redraws until it finishes.
     pub(crate) fn is_animating(&self) -> bool {
@@ -174,6 +214,7 @@ impl Renderer {
             || self.key_highlight_start.is_some()
             || self.cleared_feedback_start.is_some()
             || self.verifying_start.is_some()
+            || self.pam_message_start.is_some()
     }
 
     pub(crate) fn update_feedback_timers(&mut self) {
@@ -206,6 +247,12 @@ impl Renderer {
             if start.elapsed() > std::time::Duration::from_millis(self.config.auth_timeout) {
                 self.verifying_shown = false;
                 self.verifying_start = None;
+            }
+        }
+        if let Some(start) = self.pam_message_start {
+            if start.elapsed() > std::time::Duration::from_millis(self.config.message_duration) {
+                self.pam_message = None;
+                self.pam_message_start = None;
             }
         }
     }
@@ -243,5 +290,10 @@ impl Renderer {
     pub fn clear_verifying(&mut self) {
         self.verifying_shown = false;
         self.verifying_start = None;
+    }
+
+    pub fn show_pam_message(&mut self, msg: String) {
+        self.pam_message = Some(msg);
+        self.pam_message_start = Some(Instant::now());
     }
 }
